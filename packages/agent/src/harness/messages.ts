@@ -52,6 +52,8 @@ export interface CompactionSummaryMessage {
 }
 
 declare module "../types.ts" {
+	// Register harness-specific records in the extensible AgentMessage union.
+	// 将 harness 专用记录注册到可扩展的 AgentMessage 联合类型中。
 	interface CustomAgentMessages {
 		bashExecution: BashExecutionMessage;
 		custom: CustomMessage;
@@ -61,6 +63,8 @@ declare module "../types.ts" {
 }
 
 export function bashExecutionToText(msg: BashExecutionMessage): string {
+	// Preserve execution outcome and truncation metadata when projecting shell activity into model context.
+	// 将 shell 活动投影到模型上下文时保留执行结果和截断元数据。
 	let text = `Ran \`${msg.command}\`\n`;
 	if (msg.output) {
 		text += `\`\`\`\n${msg.output}\n\`\`\``;
@@ -118,11 +122,15 @@ export function createCustomMessage(
 }
 
 export function convertToLlm(messages: AgentMessage[]): Message[] {
+	// Project display-oriented agent messages into provider-neutral LLM roles without mutating the source log.
+	// 将面向展示的 agent 消息投影为提供商无关的 LLM role，同时不修改原始日志。
 	return messages
 		.map((m): Message | undefined => {
 			switch (m.role) {
 				case "bashExecution":
 					if (m.excludeFromContext) {
+						// Some shell entries are retained for UI/history but intentionally excluded from the next prompt.
+						// 部分 shell 记录仅保留给 UI 和历史查看，明确不进入下一次提示。
 						return undefined;
 					}
 					return {
@@ -139,6 +147,8 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 					};
 				}
 				case "branchSummary":
+					// Summary delimiters make synthetic history explicit instead of blending it with user-authored text.
+					// 摘要分隔符明确标识合成历史，避免与用户原始文本混淆。
 					return {
 						role: "user",
 						content: [{ type: "text" as const, text: BRANCH_SUMMARY_PREFIX + m.summary + BRANCH_SUMMARY_SUFFIX }],

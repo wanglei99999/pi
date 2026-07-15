@@ -1,6 +1,7 @@
 import type { Message } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "../../types.ts";
 
+// 会话分支或压缩区间内涉及的文件路径集合。
 /** File paths touched by a session branch or compaction range. */
 export interface FileOperations {
 	/** Files read but not necessarily modified. */
@@ -11,6 +12,7 @@ export interface FileOperations {
 	edited: Set<string>;
 }
 
+// 创建空的文件操作累加器，供遍历多条消息时持续合并。
 /** Create an empty file-operation accumulator. */
 export function createFileOps(): FileOperations {
 	return {
@@ -20,6 +22,7 @@ export function createFileOps(): FileOperations {
 	};
 }
 
+// 从助手工具调用中提取文件操作并加入累加器；非标准或缺少 path 的调用会被忽略。
 /** Add file operations from assistant tool calls to an accumulator. */
 export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOperations): void {
 	if (message.role !== "assistant") return;
@@ -50,6 +53,7 @@ export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOp
 	}
 }
 
+// 计算稳定排序的只读与已修改文件列表；写入或编辑过的文件不会再归入只读集合。
 /** Compute sorted read-only and modified file lists from accumulated operations. */
 export function computeFileLists(fileOps: FileOperations): { readFiles: string[]; modifiedFiles: string[] } {
 	const modified = new Set([...fileOps.edited, ...fileOps.written]);
@@ -58,6 +62,7 @@ export function computeFileLists(fileOps: FileOperations): { readFiles: string[]
 	return { readFiles: readOnly, modifiedFiles };
 }
 
+// 将文件列表格式化为摘要元数据标签，便于后续压缩继续保留工作区状态。
 /** Format file lists as summary metadata tags. */
 export function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
 	const sections: string[] = [];
@@ -87,6 +92,7 @@ function truncateForSummary(text: string, maxChars: number): string {
 	return `${text.slice(0, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
 }
 
+// 将 LLM 消息序列化为摘要提示所需的纯文本，并限制工具结果长度以控制上下文占用。
 /** Serialize LLM messages to plain text for summarization prompts. */
 export function serializeConversation(messages: Message[]): string {
 	const parts: string[] = [];

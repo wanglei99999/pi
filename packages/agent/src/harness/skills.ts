@@ -16,14 +16,19 @@ export type SkillDiagnosticCode =
 	| "invalid_metadata";
 
 /** Warning produced while loading skills. */
+/** 技能加载期间产生的非致命诊断；发现流程会继续处理其他候选项。 */
 export interface SkillDiagnostic {
 	/** Diagnostic severity. Currently only warnings are emitted. */
+	/** 诊断级别；当前加载器只产生 warning。 */
 	type: "warning";
 	/** Stable diagnostic code. */
+	/** 供调用方分类处理的稳定诊断代码。 */
 	code: SkillDiagnosticCode;
 	/** Human-readable diagnostic message. */
+	/** 面向用户展示的诊断文本。 */
 	message: string;
 	/** Path associated with the diagnostic. */
+	/** 触发诊断的技能、目录或 ignore 文件路径。 */
 	path: string;
 }
 
@@ -35,16 +40,21 @@ interface SkillFrontmatter {
 }
 
 /** Format a skill invocation prompt, optionally appending additional user instructions. */
+/** 构造技能调用提示词，并可在技能块之后追加本次用户指令。 */
 export function formatSkillInvocation(skill: Skill, additionalInstructions?: string): string {
+	// location 和相对引用根目录一同暴露给模型，使 SKILL.md 内的引用可按技能目录解析。
 	const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${dirnameEnvPath(skill.filePath)}.\n\n${skill.content}\n</skill>`;
 	return additionalInstructions ? `${skillBlock}\n\n${additionalInstructions}` : skillBlock;
 }
 
 /**
  * Load skills from one or more directories.
+ * 从一个或多个目录加载技能。
  *
  * Traverses directories recursively, loads `SKILL.md` files, loads direct root `.md` files as skills, honors ignore files,
  * and returns diagnostics for invalid skill files. Missing input directories are skipped.
+ * 递归发现 `SKILL.md`，并把输入根目录直属的 `.md` 文件作为技能；遵守 ignore 文件，
+ * 无效技能以诊断返回，缺失的输入目录则静默跳过。
  */
 export async function loadSkills(
 	env: ExecutionEnv,
@@ -53,6 +63,7 @@ export async function loadSkills(
 	const skills: Skill[] = [];
 	const diagnostics: SkillDiagnostic[] = [];
 	for (const dir of Array.isArray(dirs) ? dirs : [dirs]) {
+		// 每个输入根使用独立 ignore 匹配器，规则不会跨来源目录泄漏。
 		const rootInfoResult = await env.fileInfo(dir);
 		if (!rootInfoResult.ok) {
 			if (rootInfoResult.error.code !== "not_found") {
@@ -76,9 +87,11 @@ export async function loadSkills(
 
 /**
  * Load skills from source-tagged directories.
+ * 从带来源标签的目录加载技能。
  *
  * Source values are preserved exactly and attached to every loaded skill and diagnostic. The agent package does not
  * interpret source values; applications define their own provenance shape.
+ * source 值保持原样并附加到每个技能和诊断；agent 包不解释来源含义，优先级和溯源结构由应用定义。
  */
 export async function loadSourcedSkills<TSource, TSkill extends Skill = Skill>(
 	env: ExecutionEnv,
@@ -91,6 +104,7 @@ export async function loadSourcedSkills<TSource, TSkill extends Skill = Skill>(
 	const skills: Array<{ skill: TSkill; source: TSource }> = [];
 	const diagnostics: Array<SkillDiagnostic & { source: TSource }> = [];
 	for (const input of inputs) {
+		// 不在此处按名称去重；多个来源的同名技能全部保留，由上层按 source 解决冲突和优先级。
 		const result = await loadSkills(env, input.path);
 		for (const skill of result.skills) {
 			skills.push({ skill: mapSkill ? mapSkill(skill, input.source) : (skill as TSkill), source: input.source });
@@ -136,6 +150,7 @@ async function loadSkillsFromDirInternal(
 
 	for (const entry of entries) {
 		if (entry.name !== "SKILL.md") continue;
+		// 目录内存在 SKILL.md 时，该目录整体视为一个技能包，不再递归发现其引用资源中的技能。
 		const fullPath = entry.path;
 		const kind = await resolveKind(env, entry, diagnostics);
 		if (kind !== "file") continue;
@@ -149,6 +164,7 @@ async function loadSkillsFromDirInternal(
 	}
 
 	for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+		// 排序使递归发现顺序稳定；递归时跳过隐藏目录和 node_modules。
 		if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
 		const fullPath = entry.path;
 		const kind = await resolveKind(env, entry, diagnostics);
@@ -166,6 +182,7 @@ async function loadSkillsFromDirInternal(
 		}
 
 		if (kind !== "file" || !includeRootFiles || !entry.name.endsWith(".md")) continue;
+		// 任意名称的 .md 只在用户传入的根目录生效，嵌套目录必须用约定的 SKILL.md 声明技能。
 		const result = await loadSkillFromFile(env, fullPath);
 		if (result.skill) skills.push(result.skill);
 		diagnostics.push(...result.diagnostics);
@@ -182,6 +199,7 @@ async function addIgnoreRules(
 	diagnostics: SkillDiagnostic[],
 ): Promise<void> {
 	const relativeDir = relativeEnvPath(rootDir, dir);
+	// 嵌套 ignore 规则加上相对前缀后写入共享匹配器，使规则作用域保持在声明目录下。
 	const prefix = relativeDir ? `${relativeDir}/` : "";
 
 	for (const filename of IGNORE_FILE_NAMES) {
@@ -213,6 +231,7 @@ async function addIgnoreRules(
 }
 
 function prefixIgnorePattern(line: string, prefix: string): string | null {
+	// 保留 ignore 的否定规则和转义语义，同时把模式锚定到声明它的目录范围。
 	const trimmed = line.trim();
 	if (!trimmed) return null;
 	if (trimmed.startsWith("#") && !trimmed.startsWith("\\#")) return null;
@@ -248,6 +267,7 @@ async function loadSkillFromFile(
 	}
 
 	const { frontmatter, body } = parsed.value;
+	// name 缺失时回退到父目录名；description 则是模型发现技能所必需的元数据。
 	const skillDir = dirnameEnvPath(filePath);
 	const parentDirName = basenameEnvPath(skillDir);
 	const description = typeof frontmatter.description === "string" ? frontmatter.description : undefined;
@@ -261,6 +281,7 @@ async function loadSkillFromFile(
 	for (const error of validateName(name, parentDirName)) {
 		diagnostics.push({ type: "warning", code: "invalid_metadata", message: error, path: filePath });
 	}
+	// 名称格式问题产生诊断但仍加载技能；缺失 description 才会使技能对调用方和模型不可用。
 
 	if (!description || description.trim() === "") {
 		return { skill: null, diagnostics };
@@ -272,6 +293,7 @@ async function loadSkillFromFile(
 			description,
 			content: body,
 			filePath,
+			// 该标志只描述模型是否可主动发现/调用，技能仍可由用户或应用显式选择。
 			disableModelInvocation: frontmatter["disable-model-invocation"] === true,
 		},
 		diagnostics,
@@ -304,6 +326,7 @@ function parseFrontmatter<T extends Record<string, unknown>>(
 	content: string,
 ): Result<{ frontmatter: T; body: string }, Error> {
 	try {
+		// 先统一换行；仅当文件以 --- 开头且能找到后续 \n--- 标记时才解析 YAML frontmatter。
 		const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 		if (!normalized.startsWith("---")) return { ok: true, value: { frontmatter: {} as T, body: normalized } };
 		const endIndex = normalized.indexOf("\n---", 3);
@@ -321,6 +344,7 @@ async function resolveKind(
 	info: FileInfo,
 	diagnostics: SkillDiagnostic[],
 ): Promise<"file" | "directory" | undefined> {
+	// 执行环境可能把符号链接等条目标记为其他类型，需解析 canonicalPath 后再判断实际目标。
 	if (info.kind === "file" || info.kind === "directory") return info.kind;
 	const canonicalPath = await env.canonicalPath(info.path);
 	if (!canonicalPath.ok) {

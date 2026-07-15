@@ -28,13 +28,16 @@ export type CustomEntryContextMessageProjector = (
 ) => readonly AgentMessage[] | undefined;
 
 export interface SessionContextBuildOptions {
+	// 在默认 compaction transform 之后依次应用的附加 entry transforms。
 	/** Additional entry transforms applied after the default compaction transform. */
 	entryTransforms?: readonly ContextEntryTransform[];
+	// 可选的 custom-entry projectors；custom entries 默认不会进入模型上下文。
 	/** Optional custom-entry projectors. Custom entries are omitted from model context by default. */
 	entryProjectors?: Readonly<Record<string, CustomEntryContextMessageProjector>>;
 }
 
 function deriveSessionContextState(pathEntries: readonly SessionTreeEntry[]): Omit<SessionContext, "messages"> {
+	// 状态从完整分支路径推导，而非压缩后的消息列表，因此 compaction 之前的最后配置仍可继续生效。
 	let thinkingLevel = "off";
 	let model: { provider: string; modelId: string } | null = null;
 	let activeToolNames: string[] | null = null;
@@ -55,6 +58,7 @@ function deriveSessionContextState(pathEntries: readonly SessionTreeEntry[]): Om
 }
 
 export function defaultContextEntryTransform(pathEntries: readonly SessionTreeEntry[]): SessionTreeEntry[] {
+	// 仅最新 compaction 决定上下文边界；更早的压缩记录已被其摘要覆盖。
 	let compaction: CompactionEntry | null = null;
 	for (const entry of pathEntries) {
 		if (entry.type === "compaction") {
@@ -67,6 +71,7 @@ export function defaultContextEntryTransform(pathEntries: readonly SessionTreeEn
 
 	const entries: SessionTreeEntry[] = [compaction];
 	const compactionIdx = pathEntries.findIndex((entry) => entry.type === "compaction" && entry.id === compaction.id);
+	// 摘要替代 firstKeptEntryId 之前的历史，但保留该节点起的原始 entries 以及压缩后的新增分支。
 	let foundFirstKept = false;
 	for (let i = 0; i < compactionIdx; i++) {
 		const entry = pathEntries[i]!;
@@ -84,6 +89,7 @@ export function buildContextEntries(
 	options: SessionContextBuildOptions = {},
 ): SessionTreeEntry[] {
 	let entries = defaultContextEntryTransform(pathEntries);
+	// 自定义 transforms 按声明顺序串联，每一步都接收前一步输出的快照。
 	for (const transform of options.entryTransforms ?? []) {
 		entries = [...transform(entries)];
 	}
@@ -117,6 +123,7 @@ export function sessionEntryToContextMessages(
 		return [createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp)];
 	}
 	if (entry.type === "custom") {
+		// custom entry 只有显式注册 projector 才会生成消息，避免任意扩展数据意外进入模型上下文。
 		return [...(options.entryProjectors?.[entry.customType]?.(entry, index, entries) ?? [])];
 	}
 	return [];
@@ -177,6 +184,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	}
 
 	private mergeContextBuildOptions(options: SessionContextBuildOptions): SessionContextBuildOptions {
+		// Session 级 transforms 先运行；调用级 projector 使用同名 key 覆盖默认 projector。
 		return {
 			entryTransforms: [...(this.contextBuildOptions.entryTransforms ?? []), ...(options.entryTransforms ?? [])],
 			entryProjectors: {
@@ -192,10 +200,12 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 
 	async getSessionName(): Promise<string | undefined> {
 		const entries = await this.storage.findEntries("session_info");
+		// session_info 是追加历史，最后一条 entry 决定当前名称；空白名称归一化为 undefined。
 		return entries[entries.length - 1]?.name?.trim() || undefined;
 	}
 
 	private async appendTypedEntry<TEntry extends SessionTreeEntry>(entry: TEntry): Promise<string> {
+		// storage.appendEntry 会把新 entry 推进为当前 leaf，因此从旧 leaf 追加即可自然形成分支。
 		await this.storage.appendEntry(entry);
 		return entry.id;
 	}
@@ -294,6 +304,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		if (!(await this.storage.getEntry(targetId))) {
 			throw new SessionError("not_found", `Entry ${targetId} not found`);
 		}
+		// 标签作为独立 entry 追加，不改写目标 entry，从而保留完整的标签变更历史。
 		return this.appendTypedEntry({
 			type: "label",
 			id: await this.storage.createEntryId(),
@@ -322,8 +333,10 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		if (entryId !== null && !(await this.storage.getEntry(entryId))) {
 			throw new SessionError("not_found", `Entry ${entryId} not found`);
 		}
+		// 移动 leaf 只改变后续追加位置；已有树结构保持不变。
 		await this.storage.setLeafId(entryId);
 		if (!summary) return undefined;
+		// 可选 branch_summary 作为目标节点的新子节点追加，并成为新的当前 leaf。
 		return this.appendTypedEntry({
 			type: "branch_summary",
 			id: await this.storage.createEntryId(),

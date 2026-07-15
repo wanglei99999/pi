@@ -62,6 +62,8 @@ function createFailureMessage(model: Model<any>, error: unknown, aborted: boolea
 }
 
 function cloneStreamOptions(streamOptions?: AgentHarnessStreamOptions): AgentHarnessStreamOptions {
+	// Clone mutable header and metadata bags so hooks cannot mutate harness-wide request defaults by reference.
+	// 复制可变的 headers 和 metadata，避免 hook 通过共享引用修改 harness 的全局请求默认值。
 	return {
 		...streamOptions,
 		headers: streamOptions?.headers ? { ...streamOptions.headers } : undefined,
@@ -83,6 +85,8 @@ function applyStreamOptionsPatch(
 	base: AgentHarnessStreamOptions,
 	patch?: AgentHarnessStreamOptionsPatch,
 ): AgentHarnessStreamOptions {
+	// Own-property checks distinguish an omitted field from an explicit undefined used to clear an inherited value.
+	// 通过自有属性检查区分“未提供字段”和“显式 undefined”，后者用于清除继承值。
 	const result = cloneStreamOptions(base);
 	if (!patch) return result;
 
@@ -232,6 +236,8 @@ export class AgentHarness<
 	private async emitHook<TType extends keyof AgentHarnessEventResultMap>(
 		event: Extract<AgentHarnessOwnEvent, { type: TType }>,
 	): Promise<AgentHarnessEventResultMap[TType] | undefined> {
+		// Typed hooks run sequentially; the last non-undefined result wins while every handler still observes the event.
+		// 类型化 hook 按顺序执行，最后一个非 undefined 结果生效，但所有处理器都会收到事件。
 		const handlers = this.getHandlers(event.type as TType);
 		if (!handlers || handlers.size === 0) return undefined;
 		let lastResult: AgentHarnessEventResultMap[TType] | undefined;
@@ -253,6 +259,8 @@ export class AgentHarness<
 		sessionId: string,
 		streamOptions: AgentHarnessStreamOptions,
 	): Promise<AgentHarnessStreamOptions> {
+		// Provider-request patches compose in registration order, each handler receiving a clone of the accumulated state.
+		// provider 请求补丁按注册顺序累积，每个处理器收到当前累计状态的副本。
 		const handlers = this.getHandlers("before_provider_request");
 		let current = cloneStreamOptions(streamOptions);
 		if (!handlers || handlers.size === 0) return current;
@@ -301,6 +309,8 @@ export class AgentHarness<
 	}
 
 	private startRunPromise(): () => void {
+		// A per-run completion promise backs waitForIdle() without exposing the internal agent-loop promise or result.
+		// 每次运行使用独立完成 Promise 支撑 waitForIdle()，不暴露内部 agent loop 的结果和实现。
 		let finish = () => {};
 		this.runPromise = new Promise<void>((resolve) => {
 			finish = resolve;
@@ -312,6 +322,8 @@ export class AgentHarness<
 	}
 
 	private async createTurnState(): Promise<AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>> {
+		// Snapshot session context, resources, model, options, and active tools so one provider turn sees a coherent view.
+		// 快照会话上下文、资源、模型、选项和启用工具，确保单个 provider 回合看到一致视图。
 		const context = await this.session.buildContext();
 		const resources = this.getResources();
 		const sessionMetadata = await this.session.getMetadata();
@@ -349,6 +361,8 @@ export class AgentHarness<
 		turnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>,
 		systemPrompt?: string,
 	): AgentContext {
+		// Copy message and tool arrays at the loop boundary; hooks may replace context without mutating the turn snapshot.
+		// 在 loop 边界复制消息和工具数组，使 hook 可替换上下文而不会修改回合快照。
 		return {
 			systemPrompt: systemPrompt ?? turnState.systemPrompt,
 			messages: turnState.messages.slice(),
@@ -385,6 +399,8 @@ export class AgentHarness<
 	}
 
 	private async drainQueuedMessages(queue: AgentMessage[], mode: QueueMode): Promise<AgentMessage[]> {
+		// Queue mode drains one item or the whole queue; a queue_update hook failure restores the removed messages.
+		// 队列模式决定取一条或全部；queue_update hook 失败时会恢复已移除消息。
 		const messages = mode === "all" ? queue.splice(0) : queue.splice(0, 1);
 		if (messages.length === 0) return messages;
 		try {
@@ -410,6 +426,8 @@ export class AgentHarness<
 				return result?.messages ?? messages;
 			},
 			beforeToolCall: async ({ toolCall, args }) => {
+				// Tool hooks form the policy boundary: before may block execution, after may rewrite results or terminate the loop.
+				// 工具 hook 是策略边界：before 可阻止执行，after 可改写结果或终止 loop。
 				const result = await this.emitHook({
 					type: "tool_call",
 					toolCallId: toolCall.id,
@@ -433,6 +451,8 @@ export class AgentHarness<
 					: undefined;
 			},
 			prepareNextTurn: async () => {
+				// Persist queued mutations before rebuilding state so the next model turn includes all completed harness changes.
+				// 重建状态前先持久化排队变更，使下一模型回合包含已完成的所有 harness 修改。
 				await this.flushPendingSessionWrites();
 				const nextTurnState = await this.createTurnState();
 				setTurnState(nextTurnState);
@@ -460,6 +480,8 @@ export class AgentHarness<
 	}
 
 	private async flushPendingSessionWrites(): Promise<void> {
+		// Writes queued during a non-idle operation are replayed FIFO; an item is removed only after its session operation succeeds.
+		// 非 idle 操作期间排队的写入按 FIFO 回放；只有对应会话操作成功后才移除条目。
 		while (this.pendingSessionWrites.length > 0) {
 			const write = this.pendingSessionWrites[0]!;
 			if (write.type === "message") {
@@ -487,11 +509,15 @@ export class AgentHarness<
 
 	private async handleAgentEvent(event: AgentEvent, signal?: AbortSignal): Promise<void> {
 		if (event.type === "message_end") {
+			// Persist completed messages before notifying subscribers, so observers can immediately read consistent history.
+			// 在通知订阅者前持久化完整消息，使观察者可立即读取一致的会话历史。
 			await this.session.appendMessage(event.message);
 			await this.emitAny(event, signal);
 			return;
 		}
 		if (event.type === "turn_end") {
+			// Flush pending mutations even when a subscriber fails, then rethrow before publishing the save point.
+			// 即使订阅者失败也先刷新待处理变更，随后在发布 save point 前重新抛出错误。
 			let eventError: unknown;
 			try {
 				await this.emitAny(event, signal);
@@ -520,6 +546,8 @@ export class AgentHarness<
 		aborted: boolean,
 		signal: AbortSignal,
 	): Promise<AgentMessage[]> {
+		// Convert failures into the same message/turn/agent lifecycle as successful runs so persistence and hooks stay balanced.
+		// 将失败转换为与成功运行相同的 message/turn/agent 生命周期，保持持久化和 hook 成对完成。
 		const failureMessage = createFailureMessage(model, error, aborted);
 		await this.handleAgentEvent({ type: "message_start", message: failureMessage }, signal);
 		await this.handleAgentEvent({ type: "message_end", message: failureMessage }, signal);
@@ -536,6 +564,8 @@ export class AgentHarness<
 		let activeTurnState = turnState;
 		let messages: AgentMessage[] = [createUserMessage(text, options?.images)];
 		if (this.nextTurnQueue.length > 0) {
+			// nextTurn messages precede the newly submitted prompt; failed queue notifications restore their original order.
+			// nextTurn 消息位于新提示词之前；队列通知失败时按原顺序恢复这些消息。
 			const queuedMessages = this.nextTurnQueue.splice(0);
 			try {
 				await this.emitQueueUpdate();
@@ -555,6 +585,8 @@ export class AgentHarness<
 		if (beforeResult?.messages) messages = [...messages, ...beforeResult.messages];
 
 		const abortController = new AbortController();
+		// Each run owns one controller shared by provider streaming, event delivery, and explicit abort().
+		// 每次运行拥有独立控制器，由 provider 流、事件投递和显式 abort() 共同使用。
 		const getTurnState = () => activeTurnState;
 		const setTurnState = (nextTurnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>) => {
 			activeTurnState = nextTurnState;
@@ -597,6 +629,8 @@ export class AgentHarness<
 			}
 			throw new AgentHarnessError("invalid_state", "AgentHarness prompt completed without an assistant message");
 		} finally {
+			// Session writes must settle before releasing the controller, even if result selection or failure reporting throws.
+			// 即使结果选择或失败上报抛错，也必须先完成会话写入，再释放控制器。
 			try {
 				await this.flushPendingSessionWrites();
 			} finally {
@@ -606,6 +640,8 @@ export class AgentHarness<
 	}
 
 	async prompt(text: string, options?: { images?: ImageContent[] }): Promise<AssistantMessage> {
+		// prompt is single-flight: the phase guard rejects overlap and the run promise defines its idle boundary.
+		// prompt 采用单飞语义：phase 拒绝重叠调用，run Promise 定义其恢复 idle 的边界。
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
 		this.phase = "turn";
 		const finishRunPromise = this.startRunPromise();
@@ -655,6 +691,8 @@ export class AgentHarness<
 	}
 
 	async steer(text: string, options?: { images?: ImageContent[] }): Promise<void> {
+		// Steering and follow-up require a non-idle phase; nextTurn is intentionally allowed while idle.
+		// steer 和 followUp 要求 phase 非 idle；nextTurn 刻意允许在 idle 时预先排队。
 		if (this.phase === "idle") throw new AgentHarnessError("invalid_state", "Cannot steer while idle");
 		this.steerQueue.push(createUserMessage(text, options?.images));
 		await this.emitQueueUpdate();
@@ -672,6 +710,8 @@ export class AgentHarness<
 	}
 
 	async appendMessage(message: AgentMessage): Promise<void> {
+		// Idle mutations write immediately; mutations during a non-idle operation queue behind its session boundary.
+		// idle 时立即写入；非 idle 操作期间的修改则排队等待其会话边界。
 		try {
 			if (this.phase === "idle") {
 				await this.session.appendMessage(message);
@@ -686,6 +726,8 @@ export class AgentHarness<
 	async compact(
 		customInstructions?: string,
 	): Promise<{ summary: string; firstKeptEntryId: string; tokensBefore: number; details?: unknown }> {
+		// Compaction owns an exclusive phase; hooks may cancel it or provide a complete replacement result.
+		// compaction 独占一个 phase；hook 可取消操作或提供完整替代结果。
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "compact() requires idle harness");
 		this.phase = "compaction";
 		try {
@@ -733,6 +775,8 @@ export class AgentHarness<
 		targetId: string,
 		options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
 	): Promise<NavigateTreeResult> {
+		// Tree navigation is exclusive and may summarize the abandoned branch before moving the session leaf.
+		// 会话树导航独占执行，并可在移动 session leaf 前为离开的分支生成摘要。
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "navigateTree() requires idle harness");
 		this.phase = "branch_summary";
 		try {
@@ -780,6 +824,8 @@ export class AgentHarness<
 			let editorText: string | undefined;
 			let newLeafId: string | null;
 			if (targetEntry.type === "message" && targetEntry.message.role === "user") {
+				// Selecting an editable user/custom message moves to its parent and returns text for the caller's editor.
+				// 选择可编辑的 user/custom 消息时移动到其父节点，并把文本返回给调用方编辑器。
 				newLeafId = targetEntry.parentId;
 				const content = targetEntry.message.content;
 				editorText =
@@ -831,6 +877,8 @@ export class AgentHarness<
 	}
 
 	async setModel(model: Model<any>): Promise<void> {
+		// Runtime state updates immediately, while session audit entries are queued whenever the harness is non-idle.
+		// 运行时状态立即更新；harness 非 idle 时，对应会话审计条目进入写入队列。
 		try {
 			const previousModel = this.model;
 			if (this.phase === "idle") {
@@ -944,6 +992,8 @@ export class AgentHarness<
 	}
 
 	getResources(): AgentHarnessResources<TSkill, TPromptTemplate> {
+		// Resource getters and setters copy arrays to prevent callers from mutating harness state out of band.
+		// 资源 getter/setter 复制数组，防止调用方绕过事件流程修改 harness 状态。
 		return {
 			skills: this.resources.skills?.slice(),
 			promptTemplates: this.resources.promptTemplates?.slice(),
@@ -968,6 +1018,8 @@ export class AgentHarness<
 	}
 
 	async abort(): Promise<AbortResult> {
+		// Abort clears steer/follow-up (not nextTurn), signals the active run, waits for idle, then aggregates cleanup failures.
+		// abort 清空 steer/followUp（不清空 nextTurn）、通知当前运行并等待 idle，最后汇总清理失败。
 		const clearedSteer = [...this.steerQueue];
 		const clearedFollowUp = [...this.followUpQueue];
 		this.steerQueue = [];
@@ -1003,6 +1055,8 @@ export class AgentHarness<
 	subscribe(
 		listener: (event: AgentHarnessEvent<TSkill, TPromptTemplate>, signal?: AbortSignal) => Promise<void> | void,
 	): () => void {
+		// Subscribers observe every event sequentially; the returned closure removes only this listener.
+		// subscriber 按顺序观察全部事件；返回的闭包只移除当前监听器。
 		let handlers = this.handlers.get(SUBSCRIBER_EVENT_TYPE);
 		if (!handlers) {
 			handlers = new Set();

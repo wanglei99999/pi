@@ -17,6 +17,7 @@ interface SessionHeader {
 
 function updateLabelCache(labelsById: Map<string, string>, entry: SessionTreeEntry): void {
 	if (entry.type !== "label") return;
+	// label entry 是追加式覆盖：非空值更新缓存，空白值表示移除目标现有标签。
 	const label = entry.label?.trim();
 	if (label) {
 		labelsById.set(entry.targetId, label);
@@ -37,6 +38,7 @@ function generateEntryId(byId: { has(id: string): boolean }): string {
 	for (let i = 0; i < 100; i++) {
 		// The uuidv7 prefix is timestamp-derived and nearly constant between calls,
 		// so short ids must come from the random tail.
+		// uuidv7 前缀来自时间戳，在连续调用间几乎不变，因此短 id 必须截取随机尾部。
 		const id = uuidv7().slice(-8);
 		if (!byId.has(id)) return id;
 	}
@@ -56,6 +58,7 @@ function invalidEntry(filePath: string, lineNumber: number, message: string, cau
 }
 
 function parseHeaderLine(line: string, filePath: string): SessionHeader {
+	// header 采用严格结构校验，避免把可解析 JSON 误当成可恢复的 version 3 session。
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(line);
@@ -125,6 +128,7 @@ function parseEntryLine(line: string, filePath: string, lineNumber: number): Ses
 }
 
 function leafIdAfterEntry(entry: SessionTreeEntry): string | null {
+	// 普通 entry 将当前位置推进到自身；leaf entry 则是持久化的指针移动，当前位置取其 targetId。
 	return entry.type === "leaf" ? entry.targetId : entry.id;
 }
 
@@ -226,6 +230,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 			parentSession: options.parentSessionPath,
 			metadata: options.metadata,
 		};
+		// 新文件先完整写入 header；只有持久化成功后才创建内存 storage 实例。
 		getFileSystemResultOrThrow(
 			await fs.writeFile(filePath, `${JSON.stringify(header)}\n`),
 			`Failed to create session ${filePath}`,
@@ -255,6 +260,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 			timestamp: new Date().toISOString(),
 			targetId: leafId,
 		};
+		// 当前位置变更也作为追加 entry 持久化，使分支切换可在重载时按日志顺序恢复。
 		getFileSystemResultOrThrow(
 			await this.fs.appendFile(this.filePath, `${JSON.stringify(entry)}\n`),
 			`Failed to append session leaf ${entry.id}`,
@@ -269,6 +275,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 	}
 
 	async appendEntry(entry: SessionTreeEntry): Promise<void> {
+		// 先追加文件再更新索引，写入失败时内存状态不会领先于磁盘日志。
 		getFileSystemResultOrThrow(
 			await this.fs.appendFile(this.filePath, `${JSON.stringify(entry)}\n`),
 			`Failed to append session entry ${entry.id}`,
@@ -298,6 +305,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		const path: SessionTreeEntry[] = [];
 		let current = this.byId.get(leafId);
 		if (!current) throw new SessionError("not_found", `Entry ${leafId} not found`);
+		// 通过头插构造 root-to-leaf 顺序，并在任一 parentId 缺失时判定 session 不完整。
 		while (current) {
 			path.unshift(current);
 			if (!current.parentId) break;

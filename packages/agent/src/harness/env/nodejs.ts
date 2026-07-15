@@ -228,6 +228,7 @@ function killProcessTree(pid: number): void {
 			});
 		} catch {
 			// Ignore errors.
+			// 终止进程树属于尽力而为；目标可能已经退出或 taskkill 不可用。
 		}
 		return;
 	}
@@ -239,6 +240,7 @@ function killProcessTree(pid: number): void {
 			process.kill(pid, "SIGKILL");
 		} catch {
 			// Process already dead.
+			// 进程可能已在第一次终止尝试后退出。
 		}
 	}
 }
@@ -565,5 +567,6 @@ export class NodeExecutionEnv implements ExecutionEnv {
 
 	async cleanup(): Promise<void> {
 		// nothing to clean up for the local node implementation
+		// 本地 Node 实现不持有跨调用资源，因此无需额外清理。
 	}
 }

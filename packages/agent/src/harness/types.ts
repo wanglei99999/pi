@@ -3,6 +3,7 @@ import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } fr
 import type { Session } from "./session/session.ts";
 
 /** Result of a fallible operation. Expected failures are returned as `ok: false` instead of thrown. */
+/** 可失败操作的结果；预期内失败通过 `ok: false` 返回，而不是抛出。 */
 export type Result<TValue, TError> = { ok: true; value: TValue } | { ok: false; error: TError };
 
 /** Create a successful {@link Result}. */
@@ -16,6 +17,7 @@ export function err<TValue, TError>(error: TError): Result<TValue, TError> {
 }
 
 /** Return the success value or throw the failure error. Intended for tests and explicit adapter boundaries. */
+/** 返回成功值或抛出失败错误，仅供测试和明确的适配器边界使用。 */
 export function getOrThrow<TValue, TError>(result: Result<TValue, TError>): TValue {
 	if (!result.ok) throw result.error;
 	return result.value;
@@ -27,6 +29,7 @@ export function getOrUndefined<TValue extends object, TError>(result: Result<TVa
 }
 
 /** Normalize unknown thrown values into Error instances before using them as typed error causes. */
+/** 将未知抛出值归一化为 Error，便于作为类型化错误的 cause 继续传递。 */
 export function toError(error: unknown): Error {
 	if (error instanceof Error) return error;
 	if (typeof error === "string") return new Error(error);
@@ -39,9 +42,12 @@ export function toError(error: unknown): Error {
 
 /**
  * Skill loaded from a `SKILL.md` file or provided by an application.
+ * 从 `SKILL.md` 加载或由应用直接提供的技能。
  *
  * `name`, `description`, and `filePath` are inserted into the system prompt in an XML-formatted block as suggested by agentskills.io.
+ * `name`、`description` 和 `filePath` 会按 agentskills.io 建议的 XML 块格式写入系统提示词，
  * Use {@link formatSkillsForSystemPrompt} to generate the spec-compatible system prompt block.
+ * 使用 {@link formatSkillsForSystemPrompt} 生成符合规范的提示词块。
  */
 export interface Skill {
 	/** Stable skill name used for lookup and model-visible listings. */
@@ -53,6 +59,7 @@ export interface Skill {
 	/** Absolute path to the skill file. Used for model-visible location and resolving relative references. */
 	filePath: string;
 	/** Exclude this skill from model-visible skill lists while still allowing explicit application invocation. */
+	/** 从模型可见的技能列表中隐藏，但仍允许应用显式调用。 */
 	disableModelInvocation?: boolean;
 }
 
@@ -67,6 +74,7 @@ export interface PromptTemplate {
 }
 
 /** Resources made available to explicit invocation methods and system-prompt callbacks. */
+/** 提供给显式调用方法和系统提示词回调的资源快照。 */
 export interface AgentHarnessResources<
 	TSkill extends Skill = Skill,
 	TPromptTemplate extends PromptTemplate = PromptTemplate,
@@ -78,6 +86,7 @@ export interface AgentHarnessResources<
 }
 
 /** Curated provider request options owned by the harness and snapshotted per turn. */
+/** 由 harness 管理的精选提供商请求选项；每轮开始时创建快照，轮中修改不影响当前请求。 */
 export interface AgentHarnessStreamOptions {
 	/** Preferred transport forwarded to the stream function. */
 	transport?: Transport;
@@ -96,11 +105,14 @@ export interface AgentHarnessStreamOptions {
 }
 
 /** Per-request stream option patch returned by provider hooks. */
+/** 提供商钩子为单次请求返回的流选项补丁。 */
 export interface AgentHarnessStreamOptionsPatch
 	extends Omit<Partial<AgentHarnessStreamOptions>, "headers" | "metadata"> {
 	/** Header patch. `undefined` values delete keys; explicit `headers: undefined` clears all headers. */
+	/** Header 补丁：键值为 `undefined` 时删除该键；显式 `headers: undefined` 清空全部 header。 */
 	headers?: Record<string, string | undefined>;
 	/** Metadata patch. `undefined` values delete keys; explicit `metadata: undefined` clears all metadata. */
+	/** Metadata 补丁：键值为 `undefined` 时删除该键；显式 `metadata: undefined` 清空全部 metadata。 */
 	metadata?: Record<string, unknown | undefined>;
 }
 
@@ -216,6 +228,7 @@ export type AgentHarnessErrorCode =
 	| "unknown";
 
 /** Public AgentHarness failure with a stable top-level classification. */
+/** AgentHarness 对外暴露的失败类型，提供稳定的顶层分类，具体原因保留在 cause 中。 */
 export class AgentHarnessError extends Error {
 	public code: AgentHarnessErrorCode;
 
@@ -242,12 +255,17 @@ export interface FileInfo {
 
 /**
  * Filesystem capability used by the harness.
+ * harness 使用的文件系统能力抽象。
  *
  * Paths passed to methods may be absolute or relative to {@link cwd}. Paths returned by file operations are addressed paths
+ * 传入路径可为绝对路径或相对 {@link cwd} 的路径。文件操作返回的是文件系统命名空间中的寻址路径，
  * in the filesystem namespace, but are not canonicalized through symlinks unless returned by {@link canonicalPath}.
+ * 除非由 {@link canonicalPath} 返回，否则不会穿透符号链接进行规范化。
  *
  * Operation methods must never throw or reject. All filesystem failures, including unexpected backend failures, must be
+ * 操作方法不得抛出或 reject。包括意外后端故障在内的所有文件系统失败都必须
  * encoded in the returned {@link Result}. Implementations must preserve this invariant.
+ * 编码到返回的 {@link Result} 中；实现必须保持此不变量。
  */
 export interface FileSystem {
 	/** Current working directory for relative paths. */
@@ -318,6 +336,7 @@ export interface ShellExecOptions {
 }
 
 /** Shell execution capability used by the harness. */
+/** harness 使用的 Shell 执行能力；执行失败同样通过 Result 返回。 */
 export interface Shell {
 	/** Execute a shell command in {@link FileSystem.cwd} unless `options.cwd` is provided. */
 	exec(
@@ -329,6 +348,7 @@ export interface Shell {
 }
 
 /** Filesystem and process execution environment used by the harness. */
+/** harness 使用的文件系统与进程执行环境组合。 */
 export interface ExecutionEnv extends FileSystem, Shell {}
 
 export interface SessionTreeEntryBase {
@@ -398,10 +418,12 @@ export interface LabelEntry extends SessionTreeEntryBase {
 
 export interface SessionInfoEntry extends SessionTreeEntryBase {
 	type: "session_info"; // legacy name, kept for backwards compatibility
+	// 旧版协议名称，为兼容已有会话数据而保留
 	name?: string;
 }
 
 export interface LeafEntry extends SessionTreeEntryBase {
+	/** 持久化当前活动叶指针；叶位置变化无需修改已有树条目。 */
 	type: "leaf";
 	targetId: string | null;
 }
@@ -420,6 +442,7 @@ export type SessionTreeEntry =
 	| LeafEntry;
 
 export interface SessionContext {
+	/** 沿当前叶路径解析并应用压缩边界后，实际发送给模型的消息与运行设置。 */
 	messages: AgentMessage[];
 	thinkingLevel: string;
 	model: { provider: string; modelId: string } | null;
@@ -439,9 +462,11 @@ export interface JsonlSessionMetadata extends SessionMetadata {
 }
 
 export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
+	/** 存储层只负责条目和活动叶指针；树遍历与上下文解释由 Session 完成。 */
 	getMetadata(): Promise<TMetadata>;
 	getLeafId(): Promise<string | null>;
 	/** Persist a leaf entry that records the active session-tree leaf. */
+	/** 追加 leaf 条目以记录活动叶节点，而不是重写历史条目。 */
 	setLeafId(leafId: string | null): Promise<void>;
 	createEntryId(): Promise<string>;
 	appendEntry(entry: SessionTreeEntry): Promise<void>;
@@ -471,6 +496,7 @@ export interface SessionRepo<
 	TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
 	TListOptions = void,
 > {
+	/** 仓库管理会话生命周期；fork 创建新会话并保留源会话树的选定路径语义。 */
 	create(options: TCreateOptions): Promise<Session<TMetadata>>;
 	open(metadata: TMetadata): Promise<Session<TMetadata>>;
 	list(options?: TListOptions): Promise<TMetadata[]>;
@@ -492,14 +518,17 @@ export interface JsonlSessionRepoApi
 	extends SessionRepo<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions> {}
 
 export type AgentHarnessPhase = "idle" | "turn" | "compaction" | "branch_summary" | "retry";
+// phase 是 harness 的互斥高层状态，用于拒绝与当前生命周期冲突的操作。
 
 export type PendingSessionWrite = SessionTreeEntry extends infer TEntry
 	? TEntry extends SessionTreeEntry
 		? Omit<TEntry, "id" | "parentId" | "timestamp">
 		: never
 	: never;
+// 待写条目不包含存储层生成的 id、parentId 和 timestamp，由追加时统一补齐。
 
 export interface QueueUpdateEvent {
+	/** 三类队列分别表示打断当前轮、等待当前运行结束，以及注入下一轮上下文。 */
 	type: "queue_update";
 	steer: AgentMessage[];
 	followUp: AgentMessage[];
@@ -507,6 +536,7 @@ export interface QueueUpdateEvent {
 }
 
 export interface SavePointEvent {
+	/** 表示一批待持久化变更已提交；hadPendingMutations 区分空保存点。 */
 	type: "save_point";
 	hadPendingMutations: boolean;
 }
@@ -518,6 +548,7 @@ export interface AbortEvent {
 }
 
 export interface SettledEvent {
+	/** 当前运行、重试和压缩均已结束；nextTurnCount 表示仍等待下一轮注入的消息数。 */
 	type: "settled";
 	nextTurnCount: number;
 }
@@ -526,6 +557,7 @@ export interface BeforeAgentStartEvent<
 	TSkill extends Skill = Skill,
 	TPromptTemplate extends PromptTemplate = PromptTemplate,
 > {
+	/** 模型运行前的可拦截边界，暴露本轮提示词、图片、系统提示词和资源快照。 */
 	type: "before_agent_start";
 	prompt: string;
 	images?: ImageContent[];
@@ -534,11 +566,13 @@ export interface BeforeAgentStartEvent<
 }
 
 export interface ContextEvent {
+	/** 上下文最终发送给提供商前的可替换消息列表。 */
 	type: "context";
 	messages: AgentMessage[];
 }
 
 export interface BeforeProviderRequestEvent {
+	/** provider 请求选项定稿前的钩子；streamOptions 是本轮快照而非全局可变对象。 */
 	type: "before_provider_request";
 	model: Model<any>;
 	sessionId: string;
@@ -546,6 +580,7 @@ export interface BeforeProviderRequestEvent {
 }
 
 export interface BeforeProviderPayloadEvent {
+	/** 提供商协议载荷发送前的最后替换边界。 */
 	type: "before_provider_payload";
 	model: Model<any>;
 	payload: unknown;
@@ -558,6 +593,7 @@ export interface AfterProviderResponseEvent {
 }
 
 export interface ToolCallEvent {
+	/** 工具执行前事件；返回结果可阻止执行，但不改变原始工具协议字段。 */
 	type: "tool_call";
 	toolCallId: string;
 	toolName: string;
@@ -565,6 +601,7 @@ export interface ToolCallEvent {
 }
 
 export interface ToolResultEvent {
+	/** 工具执行后的完整结果，可由钩子替换内容、details 或错误状态。 */
 	type: "tool_result";
 	toolCallId: string;
 	toolName: string;
@@ -575,6 +612,7 @@ export interface ToolResultEvent {
 }
 
 export interface SessionBeforeCompactEvent {
+	/** 压缩写入前的可取消边界，signal 用于终止异步摘要实现。 */
 	type: "session_before_compact";
 	preparation: CompactionPreparation;
 	branchEntries: SessionTreeEntry[];
@@ -589,12 +627,14 @@ export interface SessionCompactEvent {
 }
 
 export interface SessionBeforeTreeEvent {
+	/** 会话树导航和可选分支摘要执行前的可取消边界。 */
 	type: "session_before_tree";
 	preparation: TreePreparation;
 	signal: AbortSignal;
 }
 
 export interface SessionTreeEvent {
+	/** 活动叶节点切换完成后的通知；summaryEntry 记录导航时生成的摘要。 */
 	type: "session_tree";
 	newLeafId: string | null;
 	oldLeafId: string | null;
@@ -657,6 +697,7 @@ export type AgentHarnessOwnEvent<
 	| ResourcesUpdateEvent<TSkill, TPromptTemplate>
 	| ToolsUpdateEvent;
 
+/** 合并底层 AgentEvent 与 harness 自身生命周期事件的公共事件流。 */
 export type AgentHarnessEvent<TSkill extends Skill = Skill, TPromptTemplate extends PromptTemplate = PromptTemplate> =
 	| AgentEvent
 	| AgentHarnessOwnEvent<TSkill, TPromptTemplate>;
@@ -671,6 +712,7 @@ export interface ContextResult {
 }
 
 export interface BeforeProviderRequestResult {
+	/** 仅修改当前请求；补丁合并规则由 AgentHarnessStreamOptionsPatch 定义。 */
 	streamOptions?: AgentHarnessStreamOptionsPatch;
 }
 
@@ -679,6 +721,7 @@ export interface BeforeProviderPayloadResult {
 }
 
 export interface ToolCallResult {
+	/** block 为 true 时拒绝工具执行，reason 可作为面向调用方的阻止原因。 */
 	block?: boolean;
 	reason?: string;
 }
@@ -687,6 +730,7 @@ export interface ToolResultPatch {
 	content?: Array<TextContent | ImageContent>;
 	details?: unknown;
 	isError?: boolean;
+	/** terminate 可要求在应用补丁后的工具结果处终止当前代理运行。 */
 	terminate?: boolean;
 }
 
@@ -704,6 +748,7 @@ export interface SessionBeforeTreeResult {
 }
 
 export type AgentHarnessEventResultMap = {
+	/** 事件名到允许返回值的类型映射；未列出可变结果的事件只能返回 undefined。 */
 	before_agent_start: BeforeAgentStartResult | undefined;
 	context: ContextResult | undefined;
 	before_provider_request: BeforeProviderRequestResult | undefined;
@@ -754,9 +799,11 @@ export interface CompactionSettings {
 }
 
 export interface CompactionPreparation {
+	/** 压缩前计算出的稳定边界；摘要实现不应自行重新选择 firstKeptEntryId。 */
 	firstKeptEntryId: string;
 	messagesToSummarize: AgentMessage[];
 	turnPrefixMessages: AgentMessage[];
+	/** 为 true 时，保留边界切入同一轮消息，turnPrefixMessages 用于维持工具协议配对。 */
 	isSplitTurn: boolean;
 	tokensBefore: number;
 	previousSummary?: string;
@@ -771,6 +818,7 @@ export interface FileOperations {
 }
 
 export interface TreePreparation {
+	/** 从旧叶到共同祖先之间被放弃路径的导航与摘要输入。 */
 	targetId: string;
 	oldLeafId: string | null;
 	commonAncestorId: string | null;
@@ -802,18 +850,24 @@ export interface AgentHarnessOptions<
 	TPromptTemplate extends PromptTemplate = PromptTemplate,
 	TTool extends AgentTool = AgentTool,
 > {
+	/** 应用注入的执行环境和会话决定全部文件、命令与持久化边界。 */
 	env: ExecutionEnv;
 	session: Session;
 	/**
 	 * Provider collection used for all model requests (turn streaming,
+	 * 所有模型请求共用的 Provider 集合，包括轮次流、
 	 * compaction, branch summarization). Auth resolves through the providers'
+	 * 压缩和分支摘要；认证通过提供商自身的
 	 * auth.
+	 * auth 解析。
 	 */
 	models: Models;
 	tools?: TTool[];
 	/**
 	 * Concrete resources available to explicit invocation methods and system-prompt callbacks.
+	 * 提供给显式调用方法和系统提示词回调的具体资源。
 	 * Applications own loading/reloading resources and should call `setResources()` with new values.
+	 * 资源加载与重载由应用负责；新值应通过 `setResources()` 注入。
 	 */
 	resources?: AgentHarnessResources<TSkill, TPromptTemplate>;
 	systemPrompt?:
@@ -827,6 +881,7 @@ export interface AgentHarnessOptions<
 				resources: AgentHarnessResources<TSkill, TPromptTemplate>;
 		  }) => string | Promise<string>);
 	/** Curated stream/provider request options. Snapshotted at turn start. */
+	/** 精选的流/提供商请求选项；在轮次开始时创建快照。 */
 	streamOptions?: AgentHarnessStreamOptions;
 	model: Model<any>;
 	thinkingLevel?: ThinkingLevel;

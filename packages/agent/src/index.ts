@@ -1,6 +1,8 @@
 // Core Agent
+// 核心 Agent
 export * from "./agent.ts";
 // Loop functions
+// 循环函数
 export * from "./agent-loop.ts";
 export * from "./harness/agent-harness.ts";
 export {
@@ -37,10 +39,13 @@ export { uuidv7 } from "./harness/session/uuid.ts";
 export * from "./harness/skills.ts";
 export * from "./harness/system-prompt.ts";
 // Harness
+// Harness 公共接口
 export * from "./harness/types.ts";
 export * from "./harness/utils/shell-output.ts";
 export * from "./harness/utils/truncate.ts";
 // Proxy utilities
+// 代理工具
 export * from "./proxy.ts";
 // Types
+// 类型
 export * from "./types.ts";

@@ -18,6 +18,7 @@ import {
 } from "./utils.ts";
 
 /** File-operation details stored on generated compaction entries. */
+/** 由 harness 生成的压缩条目中保存的文件操作明细，用于后续压缩继续累计状态。 */
 export interface CompactionDetails {
 	/** Files read in the compacted history. */
 	readFiles: string[];
@@ -38,6 +39,7 @@ function extractFileOperations(
 	prevCompactionIndex: number,
 ): FileOperations {
 	const fileOps = createFileOps();
+	// 仅继承 harness 自身生成且结构已知的压缩 details；hook 生成的 details 不作格式假设。
 	if (prevCompactionIndex >= 0) {
 		const prevCompaction = entries[prevCompactionIndex] as CompactionEntry;
 		if (!prevCompaction.fromHook && prevCompaction.details) {
@@ -51,6 +53,7 @@ function extractFileOperations(
 		}
 	}
 	for (const msg of messages) {
+		// 再叠加本次即将被摘要的消息，使文件状态跨多轮压缩保持累计。
 		extractFileOpsFromMessage(msg, fileOps);
 	}
 
@@ -79,6 +82,7 @@ function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined 
 }
 
 function getMessageFromEntryForCompaction(entry: SessionTreeEntry): AgentMessage | undefined {
+	// 旧 compaction 摘要通过 previousSummary 单独传入，避免同时作为消息再次摘要。
 	if (entry.type === "compaction") {
 		return undefined;
 	}
@@ -86,6 +90,7 @@ function getMessageFromEntryForCompaction(entry: SessionTreeEntry): AgentMessage
 }
 
 /** Generated compaction data ready to be persisted as a compaction entry. */
+/** 已生成、可直接持久化为 compaction 条目的压缩数据。 */
 export interface CompactionResult<T = unknown> {
 	/** Summary text that replaces compacted history in future context. */
 	summary: string;
@@ -98,10 +103,12 @@ export interface CompactionResult<T = unknown> {
 }
 
 /** Compaction thresholds and retention settings. */
+/** 压缩触发阈值、摘要预算与近期上下文保留设置。 */
 export interface CompactionSettings {
 	/** Enable automatic compaction decisions. */
 	enabled: boolean;
 	/** Tokens reserved for summary prompt and output. */
+	/** 为摘要请求及其输出预留的 token；该预算同时从上下文触发阈值中扣除。 */
 	reserveTokens: number;
 	/** Approximate recent-context tokens to keep after compaction. */
 	keepRecentTokens: number;
@@ -197,6 +204,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 }
 
 /** Return whether context usage exceeds the configured compaction threshold. */
+/** 当上下文使用量进入为摘要预留的窗口区域时触发压缩。 */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
 	if (!settings.enabled) return false;
 	return contextTokens > contextWindow - settings.reserveTokens;
@@ -221,6 +229,7 @@ function estimateTextAndImageContentChars(content: string | Array<{ type: string
 }
 
 /** Estimate token count for one message using a conservative character heuristic. */
+/** 在缺少提供商 usage 时，使用偏保守的字符启发式估算单条消息 token。 */
 export function estimateTokens(message: AgentMessage): number {
 	let chars = 0;
 
@@ -263,6 +272,7 @@ export function estimateTokens(message: AgentMessage): number {
 	return 0;
 }
 function findValidCutPoints(entries: SessionTreeEntry[], startIndex: number, endIndex: number): number[] {
+	// toolResult 不能独立成为保留起点，否则会与其前置 toolCall 断开协议配对。
 	const cutPoints: number[] = [];
 	for (let i = startIndex; i < endIndex; i++) {
 		const entry = entries[i];
@@ -303,6 +313,7 @@ function findValidCutPoints(entries: SessionTreeEntry[], startIndex: number, end
 }
 
 /** Find the user-visible message that starts the turn containing an entry. */
+/** 向前查找包含指定条目的轮次起点，用于识别压缩边界是否切入同一轮。 */
 export function findTurnStartIndex(entries: SessionTreeEntry[], entryIndex: number, startIndex: number): number {
 	for (let i = entryIndex; i >= startIndex; i--) {
 		const entry = entries[i];
@@ -330,6 +341,7 @@ export interface CutPointResult {
 }
 
 /** Find the compaction cut point that keeps approximately the requested recent-token budget. */
+/** 从后向前累计 token，选择约保留 keepRecentTokens 的合法压缩切点。 */
 export function findCutPoint(
 	entries: SessionTreeEntry[],
 	startIndex: number,
@@ -360,6 +372,7 @@ export function findCutPoint(
 		}
 	}
 	while (cutIndex > startIndex) {
+		// 将切点越过纯状态条目向前收拢，直到消息或旧压缩边界，避免留下无上下文的状态前缀。
 		const prevEntry = entries[cutIndex - 1];
 		if (prevEntry.type === "compaction") {
 			break;
@@ -457,6 +470,7 @@ Use this EXACT format:
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
 /** Generate or update a conversation summary for compaction. */
+/** 为压缩生成新摘要，或在 previousSummary 基础上增量更新摘要。 */
 export async function generateSummary(
 	currentMessages: AgentMessage[],
 	models: Models,
@@ -468,6 +482,7 @@ export async function generateSummary(
 	thinkingLevel?: ThinkingLevel,
 ): Promise<Result<string, CompactionError>> {
 	const maxTokens = Math.min(
+		// 主摘要最多使用预留预算的 80%，并始终受模型自身 maxTokens 限制。
 		Math.floor(0.8 * reserveTokens),
 		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
 	);
@@ -522,12 +537,14 @@ export async function generateSummary(
 }
 
 /** Prepared inputs for a compaction run. */
+/** 一次压缩运行所需的稳定输入快照。 */
 export interface CompactionPreparation {
 	/** Entry id where retained history starts. */
 	firstKeptEntryId: string;
 	/** Messages summarized into the history summary. */
 	messagesToSummarize: AgentMessage[];
 	/** Prefix messages summarized separately when compaction splits a turn. */
+	/** 切点落在同一轮内部时，单独摘要被裁掉的轮次前缀，维持保留后缀的语义。 */
 	turnPrefixMessages: AgentMessage[];
 	/** Whether compaction splits a turn. */
 	isSplitTurn: boolean;
@@ -542,6 +559,7 @@ export interface CompactionPreparation {
 }
 
 /** Prepare session entries for compaction, or return undefined when compaction is not applicable. */
+/** 计算压缩边界与摘要输入；空路径或末尾已是压缩条目时无需再次压缩。 */
 export function prepareCompaction(
 	pathEntries: SessionTreeEntry[],
 	settings: CompactionSettings,
@@ -561,6 +579,7 @@ export function prepareCompaction(
 	let previousSummary: string | undefined;
 	let boundaryStart = 0;
 	if (prevCompactionIndex >= 0) {
+		// 后续压缩从上次 firstKeptEntryId 开始重算，并把旧摘要作为增量更新基础。
 		const prevCompaction = pathEntries[prevCompactionIndex] as CompactionEntry;
 		previousSummary = prevCompaction.summary;
 		const firstKeptEntryIndex = pathEntries.findIndex((entry) => entry.id === prevCompaction.firstKeptEntryId);
@@ -577,6 +596,7 @@ export function prepareCompaction(
 	}
 	const firstKeptEntryId = firstKeptEntry.id;
 
+	// split-turn 时，旧历史与当前轮前缀分开摘要，避免把保留的轮次后缀解释为新一轮。
 	const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
 	const messagesToSummarize: AgentMessage[] = [];
 	for (let i = boundaryStart; i < historyEnd; i++) {
@@ -592,6 +612,7 @@ export function prepareCompaction(
 	}
 	const fileOps = extractFileOperations(messagesToSummarize, pathEntries, prevCompactionIndex);
 	if (cutPoint.isSplitTurn) {
+		// 轮次前缀虽然单独摘要，仍属于被压缩历史，文件操作必须计入累计状态。
 		for (const msg of turnPrefixMessages) {
 			extractFileOpsFromMessage(msg, fileOps);
 		}
@@ -627,6 +648,7 @@ Be concise. Focus on what's needed to understand the kept suffix.`;
 export { serializeConversation } from "./utils.ts";
 
 /** Generate compaction summary data from prepared session history. */
+/** 根据已准备的历史生成最终压缩摘要及可持久化文件状态。 */
 export async function compact(
 	preparation: CompactionPreparation,
 	models: Models,
@@ -653,6 +675,7 @@ export async function compact(
 	let summary: string;
 
 	if (isSplitTurn && turnPrefixMessages.length > 0) {
+		// split-turn 生成“既有历史摘要 + 当前轮前缀摘要”，保留后缀可据此继续工具协议。
 		const historyResult =
 			messagesToSummarize.length > 0
 				? await generateSummary(
@@ -693,6 +716,7 @@ export async function compact(
 	}
 
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
+	// 文件状态既追加到模型可见摘要，也写入 details，供下一次压缩无损继承。
 	summary += formatFileOperations(readFiles, modifiedFiles);
 
 	return ok({
@@ -711,6 +735,7 @@ async function generateTurnPrefixSummary(
 	thinkingLevel?: ThinkingLevel,
 ): Promise<Result<string, CompactionError>> {
 	const maxTokens = Math.min(
+		// 轮次前缀摘要只使用预留预算的一半，为主历史摘要和后续请求留出余量。
 		Math.floor(0.5 * reserveTokens),
 		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
 	);
