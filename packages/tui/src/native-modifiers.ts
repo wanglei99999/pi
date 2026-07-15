@@ -42,6 +42,7 @@ function loadNativeModifiersHelper(): NativeModifiersHelper | undefined {
 			}
 		} catch {
 			// Try the next possible packaging location.
+			// 当前打包位置不可用时继续尝试源码、安装包及可执行文件旁的候选路径。
 		}
 	}
 

@@ -1,4 +1,5 @@
 // Core TUI interfaces and classes
+// 本文件是 TUI 包的公共入口；消费者应从这里使用稳定组件、终端抽象和渲染工具。
 
 // Autocomplete support
 export {
@@ -28,10 +29,12 @@ export { Spacer } from "./components/spacer.ts";
 export { Text } from "./components/text.ts";
 export { TruncatedText } from "./components/truncated-text.ts";
 // Editor component interface (for custom editors)
+// 自定义编辑器只需实现该接口，即可接入与内置 Editor 相同的渲染、输入和提交流程。
 export type { EditorComponent } from "./editor-component.ts";
 // Fuzzy matching
 export { type FuzzyMatch, fuzzyFilter, fuzzyMatch } from "./fuzzy.ts";
 // Keybindings
+// 同时公开声明、冲突检测和全局 get/set 入口，使应用可替换默认键位而不硬编码按键判断。
 export {
 	getKeybindings,
 	type Keybinding,
@@ -45,6 +48,7 @@ export {
 	TUI_KEYBINDINGS,
 } from "./keybindings.ts";
 // Keyboard input handling
+// 键盘层统一解析传统终端序列与 Kitty protocol，并显式区分 press/repeat/release 事件。
 export {
 	decodeKittyPrintable,
 	isKeyRelease,
@@ -58,8 +62,10 @@ export {
 	setKittyProtocolActive,
 } from "./keys.ts";
 // Input buffering for batch splitting
+// StdinBuffer 把一次读取中的粘贴/批量输入与独立按键拆分，避免上层组件自行处理字节边界。
 export { StdinBuffer, type StdinBufferEventMap, type StdinBufferOptions } from "./stdin-buffer.ts";
 // Terminal interface and implementations
+// Terminal 接口隔离 TUI 调度与 process I/O，ProcessTerminal 提供默认真实终端实现。
 export { ProcessTerminal, type Terminal } from "./terminal.ts";
 // Terminal colors
 export {
@@ -69,6 +75,7 @@ export {
 	type TerminalColorScheme,
 } from "./terminal-colors.ts";
 // Terminal image support
+// 图片入口涵盖能力探测、协议编码、尺寸读取和缓存控制；调用方可在不支持时统一降级。
 export {
 	allocateImageId,
 	type CellDimensions,
@@ -111,4 +118,5 @@ export {
 	TUI,
 } from "./tui.ts";
 // Utilities
+// 这些工具按终端可见列处理 ANSI 文本，避免使用字符串长度造成截断和换行偏差。
 export { sliceByColumn, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./utils.ts";

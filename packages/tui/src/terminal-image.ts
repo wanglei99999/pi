@@ -23,14 +23,17 @@ export interface ImageRenderOptions {
 	maxHeightCells?: number;
 	preserveAspectRatio?: boolean;
 	/** Kitty image ID. If provided, reuses/replaces existing image with this ID. */
+	/** Kitty 图片 ID；提供后可复用或替换终端中的同一图片。 */
 	imageId?: number;
 	/** Whether Kitty should apply its default cursor movement after placement. */
+	/** Kitty 放置图片后是否执行协议默认的光标移动。 */
 	moveCursor?: boolean;
 }
 
 let cachedCapabilities: TerminalCapabilities | null = null;
 
 // Default cell dimensions - updated by TUI when terminal responds to query
+// 默认单元格像素尺寸会在 TUI 收到终端查询响应后更新。
 let cellDimensions: CellDimensions = { widthPx: 9, heightPx: 18 };
 
 export function getCellDimensions(): CellDimensions {
@@ -46,6 +49,7 @@ export function setCellDimensions(dims: CellDimensions): void {
  * outer terminal. tmux only re-emits them when its `client_termfeatures` lists
  * `hyperlinks`, and strips them otherwise. On any error fallbacks `false`.
  */
+/** 探测当前 tmux 客户端是否声明转发 OSC 8；任何错误都保守视为不支持。 */
 function probeTmuxHyperlinks(): boolean {
 	try {
 		const termfeatures = execSync("tmux display-message -p '#{client_termfeatures}'", {
@@ -71,11 +75,13 @@ export function detectCapabilities(tmuxForwardsHyperlink: () => boolean = probeT
 
 	// Emit OSC 8 hyperlinks only when tmux confirms it forwards.
 	// Image protocols are unreliable under tmux, so leave `images: null`.
+	// tmux 只有明确声明时才转发 OSC 8，图片协议在其中不可靠，因此禁用图片能力。
 	if (process.env.TMUX || term.startsWith("tmux")) {
 		return { images: null, trueColor: hasTrueColorHint, hyperlinks: tmuxForwardsHyperlink() };
 	}
 
 	// screen does not forward OSC 8 hyperlinks, so keep them off there.
+	// GNU screen 不转发 OSC 8，也不启用终端图片协议。
 	if (term.startsWith("screen")) {
 		return { images: null, trueColor: hasTrueColorHint, hyperlinks: false };
 	}
@@ -93,6 +99,7 @@ export function detectCapabilities(tmuxForwardsHyperlink: () => boolean = probeT
 	}
 
 	// Warp supports the Kitty graphics protocol and OSC 8 hyperlinks.
+	// Warp 同时支持 Kitty 图形协议和 OSC 8 超链接。
 	if (termProgram === "warpterminal" || process.env.WARP_SESSION_ID || process.env.WARP_TERMINAL_SESSION_UUID) {
 		return { images: "kitty", trueColor: true, hyperlinks: true };
 	}
@@ -121,6 +128,7 @@ export function detectCapabilities(tmuxForwardsHyperlink: () => boolean = probeT
 	// text" on terminals that swallow it, which means the URL disappears from
 	// the rendered output. Default to the legacy `text (url)` behavior unless we
 	// have positively identified a hyperlink-capable terminal above.
+	// 未知终端采用保守能力集；若 OSC 8 被静默吞掉，URL 会从界面消失，因此继续使用可见的 `text (url)` 回退形式。
 	return { images: null, trueColor: hasTrueColorHint, hyperlinks: false };
 }
 
@@ -136,6 +144,7 @@ export function resetCapabilitiesCache(): void {
 }
 
 /** Override the cached capabilities. Useful in tests to exercise both code paths. */
+/** 覆盖能力缓存，便于测试不同终端协议分支。 */
 export function setCapabilities(caps: TerminalCapabilities): void {
 	cachedCapabilities = caps;
 }
@@ -145,10 +154,12 @@ const ITERM2_PREFIX = "\x1b]1337;File=";
 
 export function isImageLine(line: string): boolean {
 	// Fast path: sequence at line start (single-row images)
+	// 单行图片通常直接以协议前缀开头，可快速识别。
 	if (line.startsWith(KITTY_PREFIX) || line.startsWith(ITERM2_PREFIX)) {
 		return true;
 	}
 	// Slow path: sequence elsewhere (multi-row images have cursor-up prefix)
+	// 多行图片前可能带光标上移序列，因此还需搜索行内协议前缀。
 	return line.includes(KITTY_PREFIX) || line.includes(ITERM2_PREFIX);
 }
 
@@ -157,8 +168,10 @@ export function isImageLine(line: string): boolean {
  * Uses random IDs to avoid collisions between different module instances
  * (e.g., main app vs extensions).
  */
+/** 为 Kitty 图形协议分配随机图片 ID，降低主程序和扩展等独立模块实例间的碰撞概率。 */
 export function allocateImageId(): number {
 	// Use random ID in range [1, 0xffffffff] to avoid collisions
+	// ID 使用协议允许的非零 32 位范围。
 	return Math.floor(Math.random() * 0xfffffffe) + 1;
 }
 
@@ -169,9 +182,11 @@ export function encodeKitty(
 		rows?: number;
 		imageId?: number;
 		/** Whether Kitty should apply its default cursor movement after placement. Default: true. */
+		/** Kitty 放置后是否执行默认光标移动，默认开启。 */
 		moveCursor?: boolean;
 	} = {},
 ): string {
+	// Kitty 传输负载按 4096 字符分块；首块携带完整参数，中间块 m=1，末块 m=0。
 	const CHUNK_SIZE = 4096;
 
 	const params: string[] = ["a=T", "f=100", "q=2"];
@@ -212,6 +227,7 @@ export function encodeKitty(
  * Delete a Kitty graphics image by ID.
  * Uses uppercase 'I' to also free the image data.
  */
+/** 按 ID 删除 Kitty 图片；大写 `I` 同时释放终端保存的图片数据。 */
 export function deleteKittyImage(imageId: number): string {
 	return `\x1b_Ga=d,d=I,i=${imageId},q=2\x1b\\`;
 }
@@ -220,6 +236,7 @@ export function deleteKittyImage(imageId: number): string {
  * Delete all visible Kitty graphics images.
  * Uses uppercase 'A' to also free the image data.
  */
+/** 删除全部可见 Kitty 图片；大写 `A` 同时释放全部图片数据。 */
 export function deleteAllKittyImages(): string {
 	return "\x1b_Ga=d,d=A,q=2\x1b\\";
 }
@@ -234,6 +251,7 @@ export function encodeITerm2(
 		inline?: boolean;
 	} = {},
 ): string {
+	// iTerm2 使用 OSC 1337 File 内联传输，尺寸和文件名作为分号分隔参数编码。
 	const params: string[] = [`inline=${options.inline !== false ? 1 : 0}`];
 
 	if (options.width !== undefined) params.push(`width=${options.width}`);
@@ -260,6 +278,7 @@ export function calculateImageCellSize(
 	maxHeightCells?: number,
 	cellDimensions: CellDimensions = { widthPx: 9, heightPx: 18 },
 ): ImageCellSize {
+	// 先按单元格像素尺寸把最大列数和行数转换为像素约束，再取较小缩放比例以保持图片比例。
 	const maxWidth = Math.max(1, Math.floor(maxWidthCells));
 	const maxHeight = maxHeightCells === undefined ? undefined : Math.max(1, Math.floor(maxHeightCells));
 	const imageWidth = Math.max(1, imageDimensions.widthPx);
@@ -273,6 +292,7 @@ export function calculateImageCellSize(
 	const scaledHeightPx = imageHeight * scale;
 	const columns = Math.ceil(scaledWidthPx / cellDimensions.widthPx);
 	const rows = Math.ceil(scaledHeightPx / cellDimensions.heightPx);
+	// 向上取整确保终端占位单元格完整覆盖缩放后的像素范围。
 
 	return {
 		columns: Math.max(1, Math.min(maxWidth, columns)),
@@ -290,6 +310,7 @@ export function calculateImageRows(
 
 export function getPngDimensions(base64Data: string): ImageDimensions | null {
 	try {
+		// PNG 的 IHDR 在固定偏移保存大端宽高，无需完整解码图片。
 		const buffer = Buffer.from(base64Data, "base64");
 
 		if (buffer.length < 24) {
@@ -311,6 +332,7 @@ export function getPngDimensions(base64Data: string): ImageDimensions | null {
 
 export function getJpegDimensions(base64Data: string): ImageDimensions | null {
 	try {
+		// JPEG 逐段扫描 SOF0-SOF2 标记，从帧头读取大端宽高。
 		const buffer = Buffer.from(base64Data, "base64");
 
 		if (buffer.length < 2) {
@@ -354,6 +376,7 @@ export function getJpegDimensions(base64Data: string): ImageDimensions | null {
 
 export function getGifDimensions(base64Data: string): ImageDimensions | null {
 	try {
+		// GIF87a/GIF89a 的逻辑屏幕宽高位于固定偏移并使用小端编码。
 		const buffer = Buffer.from(base64Data, "base64");
 
 		if (buffer.length < 10) {
@@ -376,6 +399,7 @@ export function getGifDimensions(base64Data: string): ImageDimensions | null {
 
 export function getWebpDimensions(base64Data: string): ImageDimensions | null {
 	try {
+		// WebP 根据 VP8、VP8L 或 VP8X 分块格式从不同位域解析画布尺寸。
 		const buffer = Buffer.from(base64Data, "base64");
 
 		if (buffer.length < 30) {
@@ -434,9 +458,11 @@ export function renderImage(
 	imageDimensions: ImageDimensions,
 	options: ImageRenderOptions = {},
 ): { sequence: string; rows: number; imageId?: number } | null {
+	// 渲染前按当前终端能力和已探测单元格像素尺寸计算协议序列及占位行数。
 	const caps = getCapabilities();
 
 	if (!caps.images) {
+		// 终端不支持已知图片协议时由调用方使用文本回退。
 		return null;
 	}
 
@@ -444,6 +470,7 @@ export function renderImage(
 	const size = calculateImageCellSize(imageDimensions, maxWidth, options.maxHeightCells, getCellDimensions());
 
 	if (caps.images === "kitty") {
+		// Kitty 显式接收列数和行数，返回 imageId 供后续替换或删除。
 		const sequence = encodeKitty(base64Data, {
 			columns: size.columns,
 			rows: size.rows,
@@ -454,6 +481,7 @@ export function renderImage(
 	}
 
 	if (caps.images === "iterm2") {
+		// iTerm2 使用列宽与自动高度；逻辑占位行数仍由本地尺寸换算提供。
 		const sequence = encodeITerm2(base64Data, {
 			width: size.columns,
 			height: "auto",
@@ -475,6 +503,7 @@ export function renderImage(
  * @param text - The visible text to display
  * @param url - The URL to link to
  */
+/** 使用 OSC 8 包裹可见文本，在支持的终端中生成可点击超链接。 */
 export function hyperlink(text: string, url: string): string {
 	return `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\`;
 }

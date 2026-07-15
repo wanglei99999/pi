@@ -60,6 +60,7 @@ export class SelectList implements Component {
 	setFilter(filter: string): void {
 		this.filteredItems = this.items.filter((item) => item.value.toLowerCase().startsWith(filter.toLowerCase()));
 		// Reset selection when filter changes
+		// 筛选结果变化后重置选择，避免旧索引指向不存在或意外的条目。
 		this.selectedIndex = 0;
 	}
 
@@ -69,12 +70,14 @@ export class SelectList implements Component {
 
 	invalidate(): void {
 		// No cached state to invalidate currently
+		// 当前组件不缓存渲染结果，因此无需执行失效处理。
 	}
 
 	render(width: number): string[] {
 		const lines: string[] = [];
 
 		// If no items match filter, show message
+		// 无匹配项时只显示空状态，不再计算列宽和滚动范围。
 		if (this.filteredItems.length === 0) {
 			lines.push(this.theme.noMatch("  No matching commands"));
 			return lines;
@@ -83,6 +86,7 @@ export class SelectList implements Component {
 		const primaryColumnWidth = this.getPrimaryColumnWidth();
 
 		// Calculate visible range with scrolling
+		// 让选中项尽量位于窗口中部，并在列表首尾自动夹紧范围。
 		const startIndex = Math.max(
 			0,
 			Math.min(this.selectedIndex - Math.floor(this.maxVisible / 2), this.filteredItems.length - this.maxVisible),
@@ -90,6 +94,7 @@ export class SelectList implements Component {
 		const endIndex = Math.min(startIndex + this.maxVisible, this.filteredItems.length);
 
 		// Render visible items
+		// 仅渲染可见窗口，避免长列表产生大量无用终端行。
 		for (let i = startIndex; i < endIndex; i++) {
 			const item = this.filteredItems[i];
 			if (!item) continue;
@@ -100,9 +105,11 @@ export class SelectList implements Component {
 		}
 
 		// Add scroll indicators if needed
+		// 只有窗口未覆盖全部结果时才显示当前位置提示。
 		if (startIndex > 0 || endIndex < this.filteredItems.length) {
 			const scrollText = `  (${this.selectedIndex + 1}/${this.filteredItems.length})`;
 			// Truncate if too long for terminal
+			// 指示器也必须遵守终端宽度，预留边距避免自动换行。
 			lines.push(this.theme.scrollInfo(truncateToWidth(scrollText, width - 2, "")));
 		}
 
@@ -112,16 +119,19 @@ export class SelectList implements Component {
 	handleInput(keyData: string): void {
 		const kb = getKeybindings();
 		// Up arrow - wrap to bottom when at top
+		// 向上越过首项时循环到末项。
 		if (kb.matches(keyData, "tui.select.up")) {
 			this.selectedIndex = this.selectedIndex === 0 ? this.filteredItems.length - 1 : this.selectedIndex - 1;
 			this.notifySelectionChange();
 		}
 		// Down arrow - wrap to top when at bottom
+		// 向下越过末项时循环到首项。
 		else if (kb.matches(keyData, "tui.select.down")) {
 			this.selectedIndex = this.selectedIndex === this.filteredItems.length - 1 ? 0 : this.selectedIndex + 1;
 			this.notifySelectionChange();
 		}
 		// Enter
+		// 确认操作只对当前仍存在的筛选项触发。
 		else if (kb.matches(keyData, "tui.select.confirm")) {
 			const selectedItem = this.filteredItems[this.selectedIndex];
 			if (selectedItem && this.onSelect) {
@@ -129,6 +139,7 @@ export class SelectList implements Component {
 			}
 		}
 		// Escape or Ctrl+C
+		// 取消键由可配置 keybinding 统一匹配，而不是硬编码具体按键。
 		else if (kb.matches(keyData, "tui.select.cancel")) {
 			if (this.onCancel) {
 				this.onCancel();
@@ -147,6 +158,7 @@ export class SelectList implements Component {
 		const prefixWidth = visibleWidth(prefix);
 
 		if (descriptionSingleLine && width > 40) {
+			// 宽终端使用主列与描述列；空间不足时回退为只显示主列。
 			const effectivePrimaryColumnWidth = Math.max(1, Math.min(primaryColumnWidth, width - prefixWidth - 4));
 			const maxPrimaryWidth = Math.max(1, effectivePrimaryColumnWidth - PRIMARY_COLUMN_GAP);
 			const truncatedValue = this.truncatePrimary(item, isSelected, maxPrimaryWidth, effectivePrimaryColumnWidth);
@@ -154,6 +166,7 @@ export class SelectList implements Component {
 			const spacing = " ".repeat(Math.max(1, effectivePrimaryColumnWidth - truncatedValueWidth));
 			const descriptionStart = prefixWidth + truncatedValueWidth + spacing.length;
 			const remainingWidth = width - descriptionStart - 2; // -2 for safety
+			// 额外保留两列安全边距，防止 ANSI 样式或终端边界导致换行。
 
 			if (remainingWidth > MIN_DESCRIPTION_WIDTH) {
 				const truncatedDesc = truncateToWidth(descriptionSingleLine, remainingWidth, "");
@@ -176,6 +189,7 @@ export class SelectList implements Component {
 	}
 
 	private getPrimaryColumnWidth(): number {
+		// 按当前筛选结果的最大可见宽度计算列宽，再限制在调用方配置范围内。
 		const { min, max } = this.getPrimaryColumnBounds();
 		const widestPrimary = this.filteredItems.reduce((widest, item) => {
 			return Math.max(widest, visibleWidth(this.getDisplayValue(item)) + PRIMARY_COLUMN_GAP);

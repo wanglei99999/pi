@@ -3,9 +3,11 @@ import { type KeyId, matchesKey } from "./keys.ts";
 /**
  * Global keybinding registry.
  * Downstream packages can add keybindings via declaration merging.
+ * 全局快捷键注册表；下游包可通过声明合并扩展可配置的动作集合。
  */
 export interface Keybindings {
 	// Editor navigation and editing
+	// 编辑器导航与编辑动作。
 	"tui.editor.cursorUp": true;
 	"tui.editor.cursorDown": true;
 	"tui.editor.cursorLeft": true;
@@ -28,11 +30,13 @@ export interface Keybindings {
 	"tui.editor.yankPop": true;
 	"tui.editor.undo": true;
 	// Generic input actions
+	// 通用输入动作，可由不同输入组件复用。
 	"tui.input.newLine": true;
 	"tui.input.submit": true;
 	"tui.input.tab": true;
 	"tui.input.copy": true;
 	// Generic selection actions
+	// 通用选择动作，避免各选择器硬编码具体按键。
 	"tui.select.up": true;
 	"tui.select.down": true;
 	"tui.select.pageUp": true;
@@ -169,6 +173,7 @@ export class KeybindingsManager {
 		this.conflicts = [];
 
 		const userClaims = new Map<KeyId, Set<Keybinding>>();
+		// 冲突仅针对用户显式绑定；默认键复用可能是不同组件上下文中的有意设计。
 		for (const [keybinding, keys] of Object.entries(this.userBindings)) {
 			if (!(keybinding in this.definitions)) continue;
 			for (const key of normalizeKeys(keys)) {
@@ -185,6 +190,7 @@ export class KeybindingsManager {
 		}
 
 		for (const [id, definition] of Object.entries(this.definitions)) {
+			// 显式空数组用于禁用动作，只有 undefined 才回退到默认绑定。
 			const userKeys = this.userBindings[id];
 			const keys = userKeys === undefined ? normalizeKeys(definition.defaultKeys) : normalizeKeys(userKeys);
 			this.keysById.set(id as Keybinding, keys);
@@ -208,6 +214,7 @@ export class KeybindingsManager {
 	}
 
 	getConflicts(): KeybindingConflict[] {
+		// 返回深一层副本，防止调用方修改内部冲突缓存。
 		return this.conflicts.map((conflict) => ({ ...conflict, keybindings: [...conflict.keybindings] }));
 	}
 
