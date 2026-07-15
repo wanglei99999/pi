@@ -16,6 +16,7 @@ import { DynamicBorder } from "./dynamic-border.ts";
 import { keyText } from "./keybinding-hints.ts";
 
 // EnabledIds: null = all enabled (no filter), string[] = explicit ordered list
+// EnabledIds 为 null 表示不限制模型；数组则同时表示显式启用集合和 Ctrl+P 循环顺序。
 type EnabledIds = string[] | null;
 
 function isEnabled(enabledIds: EnabledIds, id: string): boolean {
@@ -78,8 +79,10 @@ export interface ModelsConfig {
 
 export interface ModelsCallbacks {
 	/** Called whenever the enabled model set or order changes (session-only, no persist) */
+	/** 启用集合或顺序变化时立即通知会话，但不持久化。 */
 	onChange: (enabledModelIds: string[] | null) => void | Promise<void>;
 	/** Called when user wants to persist current selection to settings */
+	/** 用户显式保存时将当前集合和顺序写入 settings。 */
 	onPersist: (enabledModelIds: string[] | null) => void | Promise<void>;
 	onCancel: () => void;
 }
@@ -87,6 +90,10 @@ export interface ModelsCallbacks {
 /**
  * Component for enabling/disabling models for Ctrl+P cycling.
  * Changes are session-only until explicitly persisted with Ctrl+S.
+ */
+/**
+ * 编辑 Ctrl+P 使用的模型范围和顺序；变更先只作用于当前会话，显式保存后才持久化。
+ * 推理级别属于会话或模型选择逻辑，本组件不修改模型字段。
  */
 export class ScopedModelsSelectorComponent extends Container implements Focusable {
 	private modelsById: Map<string, Model<any>> = new Map();
@@ -97,6 +104,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 	private searchInput: Input;
 
 	// Focusable implementation - propagate to searchInput for IME cursor positioning
+	// Focusable 状态转发给搜索 Input，保证 IME 候选窗定位正确。
 	private _focused = false;
 	get focused(): boolean {
 		return this._focused;
@@ -125,6 +133,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 		this.filteredItems = this.buildItems();
 
 		// Header
+		// 标题区说明当前修改为 session-only，并提示保存快捷键。
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
 		this.addChild(new Text(theme.fg("accent", theme.bold("Model Configuration")), 0, 0));
@@ -134,15 +143,18 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 		this.addChild(new Spacer(1));
 
 		// Search input
+		// 搜索只过滤当前视图，不改变启用集合本身。
 		this.searchInput = new Input();
 		this.addChild(this.searchInput);
 		this.addChild(new Spacer(1));
 
 		// List container
+		// 列表容器在搜索、启用状态或顺序变化时整体重建。
 		this.listContainer = new Container();
 		this.addChild(this.listContainer);
 
 		// Footer hint
+		// 页脚汇总快捷键、启用数量和未保存状态。
 		this.addChild(new Spacer(1));
 		this.footerText = new Text(this.getFooterText(), 0, 0);
 		this.addChild(this.footerText);
@@ -153,6 +165,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 
 	private buildItems(): ModelItem[] {
 		// Filter out IDs that no longer have a corresponding model (e.g., after logout)
+		// 注销 provider 后可能遗留旧 ID，构建列表时过滤已不存在的模型。
 		return getSortedIds(this.enabledIds, this.allIds)
 			.filter((id) => this.modelsById.has(id))
 			.map((id) => ({
@@ -181,6 +194,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 	}
 
 	private refresh(): void {
+		// 按当前显式顺序重建条目，再应用搜索并同步选择索引和页脚状态。
 		const query = this.searchInput.getValue();
 		const items = this.buildItems();
 		this.filteredItems = query
@@ -194,10 +208,12 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 	}
 
 	private notifyChange(): void {
+		// 回调获得数组副本，避免外部意外修改内部顺序状态。
 		this.callbacks.onChange(this.enabledIds === null ? null : [...this.enabledIds]);
 	}
 
 	private updateList(): void {
+		// 列表围绕当前选择显示最多八项，并在底部展示模型名称。
 		this.listContainer.clear();
 
 		if (this.filteredItems.length === 0) {
@@ -223,6 +239,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 		}
 
 		// Add scroll indicator if needed
+		// 过滤结果超出窗口时显示当前位置和总数。
 		if (startIndex > 0 || endIndex < this.filteredItems.length) {
 			this.listContainer.addChild(
 				new Text(theme.fg("muted", `  (${this.selectedIndex + 1}/${this.filteredItems.length})`), 0, 0),
@@ -240,6 +257,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 		const kb = getKeybindings();
 
 		// Navigation
+		// 上下导航在过滤结果首尾循环。
 		if (kb.matches(data, "tui.select.up")) {
 			if (this.filteredItems.length === 0) return;
 			this.selectedIndex = this.selectedIndex === 0 ? this.filteredItems.length - 1 : this.selectedIndex - 1;
@@ -254,6 +272,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 		}
 
 		// Reorder enabled models
+		// 重排只适用于显式启用列表；全部启用状态没有独立顺序可移动。
 		const reorderUp = kb.matches(data, "app.models.reorderUp");
 		const reorderDown = kb.matches(data, "app.models.reorderDown");
 		if (reorderUp || reorderDown) {
@@ -264,6 +283,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 				const currentIndex = this.enabledIds.indexOf(item.fullId);
 				const newIndex = currentIndex + delta;
 				// Only move if within bounds
+				// 仅在显式列表边界内移动，并同步选择位置。
 				if (newIndex >= 0 && newIndex < this.enabledIds.length) {
 					this.enabledIds = move(this.enabledIds, item.fullId, delta);
 					this.isDirty = true;
@@ -276,6 +296,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 		}
 
 		// Toggle on Enter
+		// Enter 切换当前模型；从“全部启用”首次切换时转为只启用当前模型。
 		if (kb.matches(data, "tui.select.confirm")) {
 			const item = this.filteredItems[this.selectedIndex];
 			if (item) {
@@ -288,6 +309,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 		}
 
 		// Enable all (filtered if search active, otherwise all)
+		// 有搜索时只批量启用命中项，否则启用全部模型。
 		if (kb.matches(data, "app.models.enableAll")) {
 			const targetIds = this.searchInput.getValue() ? this.filteredItems.map((i) => i.fullId) : undefined;
 			this.enabledIds = enableAll(this.enabledIds, this.allIds, targetIds);
@@ -298,6 +320,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 		}
 
 		// Clear all (filtered if search active, otherwise all)
+		// 有搜索时只清除命中项，否则清空全部显式启用模型。
 		if (kb.matches(data, "app.models.clearAll")) {
 			const targetIds = this.searchInput.getValue() ? this.filteredItems.map((i) => i.fullId) : undefined;
 			this.enabledIds = clearAll(this.enabledIds, this.allIds, targetIds);
@@ -308,6 +331,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 		}
 
 		// Toggle provider of current item
+		// 按当前项 provider 批量启用或禁用其全部模型。
 		if (kb.matches(data, "app.models.toggleProvider")) {
 			const item = this.filteredItems[this.selectedIndex];
 			if (item) {
@@ -325,6 +349,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 		}
 
 		// Save/persist to settings
+		// 显式保存当前集合和顺序，并清除未保存标记。
 		if (kb.matches(data, "app.models.save")) {
 			this.callbacks.onPersist(this.enabledIds === null ? null : [...this.enabledIds]);
 			this.isDirty = false;
@@ -333,6 +358,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 		}
 
 		// Ctrl+C - clear search or cancel if empty
+		// Ctrl+C 优先清空搜索；搜索为空时关闭选择器。
 		if (matchesKey(data, Key.ctrl("c"))) {
 			if (this.searchInput.getValue()) {
 				this.searchInput.setValue("");
@@ -344,12 +370,14 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 		}
 
 		// Escape - cancel
+		// Escape 直接取消，不触发持久化。
 		if (matchesKey(data, Key.escape)) {
 			this.callbacks.onCancel();
 			return;
 		}
 
 		// Pass everything else to search input
+		// 其余按键交给搜索框并即时刷新列表。
 		this.searchInput.handleInput(data);
 		this.refresh();
 	}

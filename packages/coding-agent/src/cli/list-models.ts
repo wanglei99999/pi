@@ -1,5 +1,6 @@
 /**
  * List available models with optional fuzzy search
+ * 列出已配置认证的可用模型，并支持可选的模糊搜索。
  */
 
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -10,6 +11,7 @@ import type { ModelRegistry } from "../core/model-registry.ts";
 
 /**
  * Format a number as human-readable (e.g., 200000 -> "200K", 1000000 -> "1M")
+ * 以十进制 K/M 缩写格式化 token 数量，仅影响列表展示，不改变模型限制值。
  */
 function formatTokenCount(count: number): string {
 	if (count >= 1_000_000) {
@@ -25,14 +27,17 @@ function formatTokenCount(count: number): string {
 
 /**
  * List available models, optionally filtered by search pattern
+ * 输出可用模型表，并可按搜索模式过滤。
  */
 export async function listModels(modelRegistry: ModelRegistry, searchPattern?: string): Promise<void> {
 	const loadError = modelRegistry.getError();
+	// 自定义 models.json 加载失败只显示警告；注册表仍可能提供可用的内置模型。
 	if (loadError) {
 		console.error(chalk.yellow(`Warning: errors loading models.json:\n${loadError}`));
 	}
 
 	const models = modelRegistry.getAvailable();
+	// getAvailable 只检查是否配置了认证来源，不刷新 OAuth token，也不执行真实请求验证。
 
 	if (models.length === 0) {
 		console.log(formatNoModelsAvailableMessage());
@@ -40,6 +45,7 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 	}
 
 	// Apply fuzzy filter if search pattern provided
+	// 提供搜索模式时，把 provider 和 model id 拼接为同一检索文本，不匹配描述或能力字段。
 	let filteredModels: Model<Api>[] = models;
 	if (searchPattern) {
 		filteredModels = fuzzyFilter(models, searchPattern, (m) => `${m.provider} ${m.id}`);
@@ -51,6 +57,7 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 	}
 
 	// Sort by provider, then by model id
+	// 先按 provider、再按 model id 排序，使同一提供商的模型相邻且列表便于扫描。
 	filteredModels.sort((a, b) => {
 		const providerCmp = a.provider.localeCompare(b.provider);
 		if (providerCmp !== 0) return providerCmp;
@@ -58,6 +65,7 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 	});
 
 	// Calculate column widths
+	// 列宽同时考虑表头和全部筛选结果，随后表头与数据复用同一宽度对齐。
 	const rows = filteredModels.map((m) => ({
 		provider: m.provider,
 		model: m.id,

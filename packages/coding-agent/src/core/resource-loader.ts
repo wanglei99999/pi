@@ -330,6 +330,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	async loadProjectTrustExtensions(): Promise<LoadExtensionsResult> {
 		// Force untrusted project settings for the bootstrap pass. This keeps project-local
 		// extensions/packages out while still loading user/global and temporary CLI extensions.
+		// 首次引导强制按不信任项目处理，排除项目内扩展和包，但仍加载用户级、全局及临时 CLI 扩展。
 		this.settingsManager.setProjectTrusted(false);
 		await this.settingsManager.reload();
 		return this.loadCurrentExtensionSet({ includeInlineFactories: true });
@@ -350,6 +351,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		}
 
 		// reload() preserves SettingsManager.projectTrusted and reloads settings for that trust state.
+		// reload() 会保留最终的 projectTrusted，并按该信任状态重新读取设置。
 		await this.settingsManager.reload();
 		const resolvedPaths = await this.packageManager.resolve();
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
@@ -362,6 +364,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.extensionThemeSourceInfos = new Map();
 
 		// Helper to extract enabled paths and store metadata
+		// 即使资源被禁用也先记录元数据，后续诊断和来源归属仍需要完整信息。
 		const getEnabledResources = (resources: ResolvedResource[]): ResolvedResource[] => {
 			for (const r of resources) {
 				if (!metadataByPath.has(r.path)) {
@@ -381,6 +384,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const enabledSkills = enabledSkillResources.map((resource) => this.mapSkillPath(resource, metadataByPath));
 
 		// Add CLI paths metadata
+		// CLI 注入的路径属于临时顶层来源，不能被误归类为用户或项目配置。
 		for (const r of cliExtensionPaths.extensions) {
 			if (!metadataByPath.has(r.path)) {
 				metadataByPath.set(r.path, { source: "cli", scope: "temporary", origin: "top-level" });
@@ -528,6 +532,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		}
 
 		const preloadedByPath = new Map(
+			// 信任确认前已安全加载的扩展直接复用，避免工厂或模块初始化执行两次。
 			preTrustExtensions.extensions
 				.filter((extension) => !extension.path.startsWith("<inline:"))
 				.map((extension) => [extension.resolvedPath, extension]),
@@ -569,7 +574,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	private addExtensionConflictDiagnostics(extensionsResult: LoadExtensionsResult): void {
 		// Detect extension conflicts (tools, commands, flags with same names from different extensions)
+		// 检测不同扩展注册的同名工具、命令和 flag 冲突。
 		// Keep all extensions loaded. Conflicts are reported as diagnostics, and precedence is handled by load order.
+		// 冲突只生成诊断，不卸载扩展；最终优先级仍由加载顺序决定。
 		const conflicts = this.detectExtensionConflicts(extensionsResult.extensions);
 		for (const conflict of conflicts) {
 			extensionsResult.errors.push({ path: conflict.path, error: conflict.message });
@@ -787,6 +794,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	private mergePaths(primary: string[], additional: string[]): string[] {
+		// 使用 canonical path 去重以合并符号链接别名，同时保留首个输入的展示路径和顺序。
 		const merged: string[] = [];
 		const seen = new Set<string>();
 
@@ -1003,11 +1011,13 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const conflicts: Array<{ path: string; message: string }> = [];
 
 		// Track which extension registered each tool and flag
+		// 记录每个工具和 flag 的首个所有者，用于把后续冲突归因到具体扩展。
 		const toolOwners = new Map<string, string>();
 		const flagOwners = new Map<string, string>();
 
 		for (const ext of extensions) {
 			// Check tools
+			// 工具重名时保留首个所有者，仅为后加载扩展追加诊断。
 			for (const toolName of ext.tools.keys()) {
 				const existingOwner = toolOwners.get(toolName);
 				if (existingOwner && existingOwner !== ext.path) {
@@ -1021,6 +1031,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			}
 
 			// Check flags
+			// flag 与工具分别维护命名空间，避免不同资源类型之间产生伪冲突。
 			for (const flagName of ext.flags.keys()) {
 				const existingOwner = flagOwners.get(flagName);
 				if (existingOwner && existingOwner !== ext.path) {

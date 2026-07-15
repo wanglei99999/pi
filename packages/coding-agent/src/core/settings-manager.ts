@@ -64,9 +64,13 @@ export type TransportSetting = Transport;
 
 /**
  * Package source for npm/git packages.
+ * npm/git 包的资源来源配置。
  * - String form: load all resources from the package
+ * - 字符串形式：加载包内全部资源
  * - Object form: filter which resources to load
+ * - 对象形式：筛选需要加载的资源类型
  * - autoload=false: start empty and only apply explicit resource patterns
+ * - autoload=false：默认不加载，仅应用显式资源模式
  */
 export type PackageSource =
 	| string
@@ -128,6 +132,7 @@ export interface Settings {
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
+/** 设置合并顺序为后者优先；项目设置或运行时覆盖全局设置，嵌套对象按字段合并，数组整体替换。 */
 function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 	const result: Settings = { ...base };
 
@@ -140,6 +145,7 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 		}
 
 		// For nested objects, merge recursively
+		// 嵌套设置保留基础对象中未覆盖的键；当前设置结构只需要合并这一层。
 		if (
 			typeof overrideValue === "object" &&
 			overrideValue !== null &&
@@ -151,6 +157,7 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 			(result as Record<string, unknown>)[key] = { ...baseValue, ...overrideValue };
 		} else {
 			// For primitives and arrays, override value wins
+			// 标量和数组不做元素级合并，直接采用更高优先级的值。
 			(result as Record<string, unknown>)[key] = overrideValue;
 		}
 	}
@@ -196,6 +203,7 @@ export class FileSettingsStorage implements SettingsStorage {
 	}
 
 	private acquireLockSyncWithRetry(path: string): () => void {
+		// 设置写入保持同步 API；短暂重试文件锁可协调同一配置文件的并发进程写入。
 		const maxAttempts = 10;
 		const delayMs = 20;
 		let lastError: unknown;
@@ -215,6 +223,7 @@ export class FileSettingsStorage implements SettingsStorage {
 				const start = Date.now();
 				while (Date.now() - start < delayMs) {
 					// Sleep synchronously to avoid changing callers to async.
+					// 同步短等待保持存储接口不变，重试窗口仅用于消化瞬时锁竞争。
 				}
 			}
 		}
@@ -229,6 +238,7 @@ export class FileSettingsStorage implements SettingsStorage {
 		let release: (() => void) | undefined;
 		try {
 			// Only create directory and lock if file exists or we need to write
+			// 纯读取缺失文件时不创建目录或锁文件，避免仅启动程序就产生配置痕迹。
 			const fileExists = existsSync(path);
 			if (fileExists) {
 				release = this.acquireLockSyncWithRetry(path);
@@ -237,6 +247,7 @@ export class FileSettingsStorage implements SettingsStorage {
 			const next = fn(current);
 			if (next !== undefined) {
 				// Only create directory when we actually need to write
+				// 回调以 undefined 表示只读；只有返回新内容时才延迟创建目录并获取写锁。
 				if (!existsSync(dir)) {
 					mkdirSync(dir, { recursive: true });
 				}
@@ -277,11 +288,17 @@ export class SettingsManager {
 	private settings: Settings;
 	private projectTrusted: boolean;
 	private modifiedFields = new Set<keyof Settings>(); // Track global fields modified during session
+	// 仅记录本会话修改的全局字段，写盘时据此保留其他进程新增的内容。
 	private modifiedNestedFields = new Map<keyof Settings, Set<string>>(); // Track global nested field modifications
+	// 嵌套字段细化到子键，避免修改 retry.enabled 时覆盖并发更新的 retry.provider。
 	private modifiedProjectFields = new Set<keyof Settings>(); // Track project fields modified during session
+	// 项目作用域使用独立的修改集合，防止全局与项目写入互相污染。
 	private modifiedProjectNestedFields = new Map<keyof Settings, Set<string>>(); // Track project nested field modifications
+	// 项目嵌套字段同样细化到子键，以便和磁盘上的并发修改合并。
 	private globalSettingsLoadError: Error | null = null; // Track if global settings file had parse errors
+	// 加载错误会阻止覆盖原文件，避免用空或部分设置破坏用户仍可修复的配置。
 	private projectSettingsLoadError: Error | null = null; // Track if project settings file had parse errors
+	// 项目文件解析错误独立记录，只阻止该作用域写入，不影响全局设置。
 	private writeQueue: Promise<void> = Promise.resolve();
 	private errors: SettingsError[];
 
@@ -301,10 +318,12 @@ export class SettingsManager {
 		this.globalSettingsLoadError = globalLoadError;
 		this.projectSettingsLoadError = projectLoadError;
 		this.errors = [...initialErrors];
+		// 有效设置以 global 为基础、project 为覆盖层；未受信任项目在加载阶段即为空层。
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
 	}
 
 	/** Create a SettingsManager that loads from files */
+	/** 创建使用全局和当前项目 settings.json 文件的设置管理器。 */
 	static create(
 		cwd: string,
 		agentDir: string = getAgentDir(),
@@ -315,6 +334,7 @@ export class SettingsManager {
 	}
 
 	/** Create a SettingsManager from an arbitrary storage backend */
+	/** 从任意存储后端加载两个作用域，并把解析错误留给调用方统一读取。 */
 	static fromStorage(storage: SettingsStorage, options: SettingsManagerCreateOptions = {}): SettingsManager {
 		const projectTrusted = options.projectTrusted ?? true;
 		const globalLoad = SettingsManager.tryLoadFromStorage(storage, "global");
@@ -339,6 +359,7 @@ export class SettingsManager {
 	}
 
 	/** Create an in-memory SettingsManager (no file I/O) */
+	/** 创建无文件 I/O 的内存设置管理器；初始值仍执行与文件加载相同的迁移。 */
 	static inMemory(settings: Partial<Settings> = {}, options: SettingsManagerCreateOptions = {}): SettingsManager {
 		const storage = new InMemorySettingsStorage();
 		const initialSettings = SettingsManager.migrateSettings(structuredClone(settings) as Record<string, unknown>);
@@ -348,6 +369,7 @@ export class SettingsManager {
 
 	private static loadFromStorage(storage: SettingsStorage, scope: SettingsScope, projectTrusted = true): Settings {
 		if (scope === "project" && !projectTrusted) {
+			// 未受信任项目的配置既不读取也不参与合并，避免项目文件注入行为设置。
 			return {};
 		}
 
@@ -377,20 +399,24 @@ export class SettingsManager {
 	}
 
 	/** Migrate old settings format to new format */
+	/** 在读取时把旧字段归一化到当前结构；迁移结果先驻留内存，后续正常写入再持久化。 */
 	private static migrateSettings(settings: Record<string, unknown>): Settings {
 		// Migrate queueMode -> steeringMode
+		// 仅在新字段缺失时迁移，显式的新格式配置始终优先。
 		if ("queueMode" in settings && !("steeringMode" in settings)) {
 			settings.steeringMode = settings.queueMode;
 			delete settings.queueMode;
 		}
 
 		// Migrate legacy websockets boolean -> transport enum
+		// 旧布尔开关映射到 transport 枚举，并保留用户已写入的新字段。
 		if (!("transport" in settings) && typeof settings.websockets === "boolean") {
 			settings.transport = settings.websockets ? "websocket" : "sse";
 			delete settings.websockets;
 		}
 
 		// Migrate old skills object format to new array format
+		// 将旧 skills 对象拆为顶层命令开关和目录数组，避免旧容器继续泄漏到新结构。
 		if (
 			"skills" in settings &&
 			typeof settings.skills === "object" &&
@@ -412,6 +438,7 @@ export class SettingsManager {
 		}
 
 		// Migrate retry.maxDelayMs -> retry.provider.maxRetryDelayMs
+		// 提供商级新值优先；迁移完成后删除旧键，防止两套来源产生歧义。
 		if (
 			"retry" in settings &&
 			typeof settings.retry === "object" &&
@@ -460,6 +487,7 @@ export class SettingsManager {
 		this.modifiedProjectNestedFields.clear();
 
 		if (!trusted) {
+			// 撤销信任立即移除项目覆盖层；全局设置保持可用且不触碰磁盘上的项目文件。
 			this.projectSettings = {};
 			this.projectSettingsLoadError = null;
 			this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
@@ -476,6 +504,7 @@ export class SettingsManager {
 	}
 
 	async reload(): Promise<void> {
+		// 先等待排队写入，确保重新读取的是本会话最新的持久化状态。
 		await this.writeQueue;
 		const globalLoad = SettingsManager.tryLoadFromStorage(this.storage, "global");
 		if (!globalLoad.error) {
@@ -504,11 +533,13 @@ export class SettingsManager {
 	}
 
 	/** Apply additional overrides on top of current settings */
+	/** 应用仅驻留内存的最高优先级覆盖，不修改 global/project 文件。 */
 	applyOverrides(overrides: Partial<Settings>): void {
 		this.settings = deepMergeSettings(this.settings, overrides);
 	}
 
 	/** Mark a global field as modified during this session */
+	/** 标记全局作用域的字段或嵌套子键，供写盘时执行最小范围合并。 */
 	private markModified(field: keyof Settings, nestedKey?: string): void {
 		this.modifiedFields.add(field);
 		if (nestedKey) {
@@ -520,6 +551,7 @@ export class SettingsManager {
 	}
 
 	/** Mark a project field as modified during this session */
+	/** 标记项目作用域的字段或嵌套子键，与全局修改独立追踪。 */
 	private markProjectModified(field: keyof Settings, nestedKey?: string): void {
 		this.modifiedProjectFields.add(field);
 		if (nestedKey) {
@@ -537,6 +569,7 @@ export class SettingsManager {
 	}
 
 	private recordError(scope: SettingsScope, error: unknown): void {
+		// 加载和后台写入错误统一规范化并按作用域收集，供 drainErrors 报告。
 		const normalizedError = error instanceof Error ? error : new Error(String(error));
 		this.errors.push({ scope, error: normalizedError });
 	}
@@ -553,6 +586,7 @@ export class SettingsManager {
 	}
 
 	private enqueueWrite(scope: SettingsScope, task: () => void): void {
+		// 串行队列保持调用顺序；捕获失败后队列仍可继续处理后续写入。
 		this.writeQueue = this.writeQueue
 			.then(() => {
 				if (scope === "project") {
@@ -581,6 +615,7 @@ export class SettingsManager {
 		modifiedNestedFields: Map<keyof Settings, Set<string>>,
 	): void {
 		this.storage.withLock(scope, (current) => {
+			// 持锁后重新读取磁盘，只覆盖本会话标记过的字段，从而保留并发进程的无关修改。
 			const currentFileSettings = current
 				? SettingsManager.migrateSettings(JSON.parse(current) as Record<string, unknown>)
 				: {};
@@ -588,6 +623,7 @@ export class SettingsManager {
 			for (const field of modifiedFields) {
 				const value = snapshotSettings[field];
 				if (modifiedNestedFields.has(field) && typeof value === "object" && value !== null) {
+					// 嵌套对象只写已修改子键；未触及的子键以锁内最新文件内容为准。
 					const nestedModified = modifiedNestedFields.get(field)!;
 					const baseNested = (currentFileSettings[field] as Record<string, unknown>) ?? {};
 					const inMemoryNested = value as Record<string, unknown>;
@@ -606,9 +642,11 @@ export class SettingsManager {
 	}
 
 	private save(): void {
+		// 内存中的有效值立即按 project > global 重算，磁盘写入则异步串行排队。
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
 
 		if (this.globalSettingsLoadError) {
+			// 原文件无法解析时保留内存修改但拒绝覆盖，错误已记录并可由调用方展示。
 			return;
 		}
 
@@ -627,6 +665,7 @@ export class SettingsManager {
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
 
 		if (this.projectSettingsLoadError) {
+			// 与全局作用域一致，解析失败的项目文件不会被后续设置操作静默覆盖。
 			return;
 		}
 
@@ -651,6 +690,7 @@ export class SettingsManager {
 	}
 
 	drainErrors(): SettingsError[] {
+		// 错误采用 drain 语义，保证同一加载或写入失败只向上层报告一次。
 		const drained = [...this.errors];
 		this.errors = [];
 		return drained;
@@ -954,6 +994,7 @@ export class SettingsManager {
 	}
 
 	/** Set the analytics opt-in preference; generates a tracking identifier on first opt-in */
+	/** 设置分析数据选择；首次启用时生成并持久化匿名 trackingId，后续启停复用该标识。 */
 	setEnableAnalytics(enabled: boolean): void {
 		this.globalSettings.enableAnalytics = enabled;
 		this.markModified("enableAnalytics");
@@ -1090,6 +1131,7 @@ export class SettingsManager {
 
 	getClearOnShrink(): boolean {
 		// Settings takes precedence, then env var, then default false
+		// 优先级依次为合并后的设置、环境变量，最后为 false 默认值。
 		if (this.settings.terminal?.clearOnShrink !== undefined) {
 			return this.settings.terminal.clearOnShrink;
 		}

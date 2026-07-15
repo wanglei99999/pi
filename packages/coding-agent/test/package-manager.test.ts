@@ -50,6 +50,7 @@ interface PackageManagerInternals {
 }
 
 // Helper to check if a resource is enabled
+// 统一路径分隔符后再断言资源状态，使同一组用例可跨平台验证解析结果。
 const isEnabled = (r: ResolvedResource, pathMatch: string, matchFn: "endsWith" | "includes" = "endsWith") => {
 	const normalizedPath = normalizeForMatch(r.path);
 	const normalizedMatch = normalizeForMatch(pathMatch);
@@ -237,6 +238,7 @@ Content`,
 
 				// Project auto-discovered has higher precedence than user auto-discovered,
 				// so the surviving entry should be scoped to project.
+				// 同一真实路径被两个作用域发现时只保留一份，并以 project 作用域覆盖 user 作用域。
 				expect(result.extensions[0].metadata.scope).toBe("project");
 				expect(result.skills[0].metadata.scope).toBe("project");
 				expect(result.prompts[0].metadata.scope).toBe("project");
@@ -264,6 +266,7 @@ Content`,
 
 		it("should resolve directory with package.json pi.extensions in extensions setting", async () => {
 			// Create a package with pi.extensions in package.json
+			// manifest 是此目录可加载入口的信任边界，未声明的相邻源码不应被自动执行。
 			const pkgDir = join(tempDir, "my-extensions-pkg");
 			mkdirSync(join(pkgDir, "extensions"), { recursive: true });
 			writeFileSync(
@@ -280,6 +283,7 @@ Content`,
 			writeFileSync(join(pkgDir, "extensions", "helper.ts"), "export const x = 1;"); // Not in manifest, shouldn't be loaded
 
 			// Add the directory to extensions setting (not packages setting)
+			// 此路径刻意走 extensions 配置入口，以验证目录解析仍遵守 package.json 中的声明。
 			settingsManager.setExtensionPaths([pkgDir]);
 
 			const result = await packageManager.resolve();
@@ -293,6 +297,7 @@ Content`,
 			);
 
 			// Should NOT find helper.ts (not declared in manifest)
+			// helper.ts 未进入受信任入口集合，因此即使位于同一目录也必须保持不可加载。
 			expect(result.extensions.some((r) => pathEndsWith(r.path, "helper.ts"))).toBe(false);
 		});
 	});
@@ -505,6 +510,7 @@ Content`,
 				const agentsSkillsDir = join(tempDir, ".agents", "skills");
 				mkdirSync(agentsSkillsDir, { recursive: true });
 				// Use junction on Windows to avoid EPERM when symlink privileges are unavailable.
+				// Windows 使用 junction 保留相同的去重语义，同时避免测试依赖额外的符号链接权限。
 				const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
 				symlinkSync(agentsSkillsDir, agentSkillsDir, directoryLinkType);
 
@@ -667,6 +673,7 @@ Content`,
 			writeFileSync(extPath, "export default function() {}");
 
 			// Local paths don't trigger install progress, but we can verify the callback is set
+			// 本地来源没有安装阶段，因此回调注册本身不应伪造网络安装进度。
 			await packageManager.resolveExtensionSources([extPath]);
 
 			// For now just verify no errors - npm/git would trigger actual events
@@ -691,6 +698,8 @@ Content`,
 	});
 
 	describe("npmCommand", () => {
+		// This matrix keeps package-manager-specific argv, managed roots, and legacy lookup behavior separate.
+		// 此矩阵分别约束各包管理器的 argv、托管安装根目录以及旧版全局路径兼容逻辑。
 		it("should use npmCommand argv for npm installs", async () => {
 			settingsManager = SettingsManager.inMemory({
 				npmCommand: ["mise", "exec", "node@20", "--", "npm"],
@@ -1085,11 +1094,14 @@ Content`,
 	});
 
 	describe("source parsing", () => {
+		// Source classification is a trust boundary: npm, git, and local inputs must not be reinterpreted interchangeably.
+		// 来源分类属于信任边界：npm、git 与本地输入不可被相互误判。
 		it("should emit progress events on install attempt", async () => {
 			const events: ProgressEvent[] = [];
 			packageManager.setProgressCallback((event) => events.push(event));
 
 			// Use public install method which emits progress events
+			// 通过公开入口覆盖完整事件边界，确保失败安装也先发出 start，再发出 error。
 			try {
 				await packageManager.install("npm:nonexistent-package@1.0.0");
 			} catch {
@@ -1110,6 +1122,7 @@ Content`,
 
 			try {
 				// This should be parsed as a git source, not throw "unsupported"
+				// 无前缀 HTTPS URL 仍应进入受支持的 git 安装路径，而不是在来源识别阶段被拒绝。
 				try {
 					await packageManager.install("https://github.com/nonexistent/repo");
 				} catch {
@@ -1162,6 +1175,8 @@ Content`,
 	});
 
 	describe("git install paths", () => {
+		// Derived repository paths must remain inside the scope-specific install root before any git command runs.
+		// 派生出的仓库路径必须先限制在对应作用域的安装根目录内，之后才允许执行 git 命令。
 		it("should reject paths outside git install roots", () => {
 			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
 			const traversalSource = {
@@ -1181,6 +1196,8 @@ Content`,
 	});
 
 	describe("temporary install paths", () => {
+		// Temporary packages stay under the agent-owned tree with private permissions instead of using a shared OS temp root.
+		// 临时包位于 agent 自有目录并使用私有权限，不落入共享的系统临时根目录。
 		it("should place temporary npm packages under the agent temp extension folder", () => {
 			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
 			const source = managerWithInternals.parseSource("npm:left-pad");
@@ -1354,6 +1371,7 @@ Content`,
 			const identity4 = (packageManager as any).getPackageIdentity("https://github.com/user/repo.git");
 
 			// All should have the same identity (normalized)
+			// identity 只表示仓库本身，协议形式、.git 后缀和 ref 不应制造重复安装。
 			expect(identity1).toBe("git:github.com/user/repo");
 			expect(identity2).toBe("git:github.com/user/repo");
 			expect(identity3).toBe("git:github.com/user/repo");
@@ -1375,6 +1393,7 @@ Content`,
 
 			// Since these URLs don't actually exist and we can't clone them,
 			// we verify they produce the same identity
+			// 这里隔离验证规范化算法，不依赖真实网络或仓库可用性。
 			const id1 = (packageManager as any).getPackageIdentity("https://github.com/user/repo");
 			const id2 = (packageManager as any).getPackageIdentity("git:github.com/user/repo");
 			const id3 = (packageManager as any).getPackageIdentity("https://github.com/user/repo.git");
@@ -1552,6 +1571,7 @@ Content`,
 		it("should apply user filters on top of manifest filters (not replace)", async () => {
 			// Manifest excludes baz.ts, user excludes bar.ts
 			// Result should exclude BOTH
+			// 用户过滤器叠加在 manifest 过滤器之上，不能覆盖或放宽包作者声明的排除项。
 			const pkgDir = join(tempDir, "layered-pkg");
 			mkdirSync(join(pkgDir, "extensions"), { recursive: true });
 			writeFileSync(join(pkgDir, "extensions", "foo.ts"), "export default function() {}");
@@ -1728,6 +1748,7 @@ Content`,
 			writeFileSync(join(extDir, "force-back.ts"), "export default function() {}");
 
 			// Exclude all, then force-include one back
+			// force-include 只恢复明确指定的资源，其余全局排除结果必须保持不变。
 			settingsManager.setExtensionPaths(["extensions", "!extensions/*.ts", "+extensions/force-back.ts"]);
 
 			const result = await packageManager.resolve();
@@ -1894,6 +1915,7 @@ Content`,
 			writeFileSync(join(pkgDir, "extensions", "shared.ts"), "export default function() {}");
 
 			// Same package in both global and project
+			// 同一来源跨作用域重复配置时，project 配置应作为更具体的有效记录。
 			settingsManager.setPackages([pkgDir]); // global
 			settingsManager.setProjectPackages([pkgDir]); // project
 
@@ -1905,6 +1927,7 @@ Content`,
 
 			const result = await packageManager.resolve();
 			// Should only appear once (deduped), with project scope
+			// 该断言防止同一扩展被重复加载，并固定最终来源元数据的作用域。
 			const sharedPaths = result.extensions.filter((r) => r.path.includes("shared-pkg"));
 			expect(sharedPaths.length).toBe(1);
 			expect(sharedPaths[0].metadata.scope).toBe("project");
@@ -1928,6 +1951,7 @@ Content`,
 
 		it("should dedupe SSH and HTTPS URLs for same repo", async () => {
 			// Same repository, different URL formats
+			// 传输协议属于访问形式而非包身份，不应绕过去重产生两份安装。
 			const httpsUrl = "https://github.com/user/repo";
 			const sshUrl = "git:git@github.com:user/repo";
 
@@ -2003,6 +2027,7 @@ Content`,
 		it("should only load index.ts from subdirectories, not helper modules", async () => {
 			// Regression test: packages with multi-file extensions in subdirectories
 			// should only load the index.ts entry point, not helper modules like agents.ts
+			// 此回归防止扫描器把实现辅助模块当成独立扩展执行，入口边界仅限 index.ts 或 manifest 声明。
 			const pkgDir = join(tempDir, "multifile-pkg");
 			mkdirSync(join(pkgDir, "extensions", "subagent"), { recursive: true });
 
@@ -2104,6 +2129,8 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 	});
 
 	describe("offline mode and network timeouts", () => {
+		// Update tests distinguish installed, missing, pinned, and range sources while ensuring offline resolution performs no network work.
+		// 更新矩阵区分已安装、缺失、固定版本和范围版本来源，并确保离线解析不触发网络操作。
 		it("should update npm range packages using the configured spec", async () => {
 			const installedPath = join(tempDir, ".pi", "npm", "node_modules", "example");
 			mkdirSync(installedPath, { recursive: true });
@@ -2151,6 +2178,8 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 		});
 
 		it("should migrate legacy user npm installs into the managed npm root during update", async () => {
+			// Migration is completed by reinstalling into the managed root; the legacy location remains only a discovery fallback.
+			// 迁移通过重新安装到托管根目录完成；旧位置仅作为发现已有安装的兼容回退。
 			const legacyRoot = join(tempDir, "legacy-global", "node_modules");
 			const legacyPath = join(legacyRoot, "legacy-pkg");
 			const managedPath = join(agentDir, "npm", "node_modules", "legacy-pkg");
@@ -2189,6 +2218,8 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 		});
 
 		it("should batch npm updates per scope and run git updates in parallel while skipping pinned npm and current packages", async () => {
+			// The regression checks both selection and scheduling: one npm batch per scope, independent git concurrency, and no pinned/current work.
+			// 此回归同时验证选择与调度：每个作用域一个 npm 批次、git 独立并发，并跳过固定版本和已最新来源。
 			const userOldPath = join(agentDir, "npm", "node_modules", "user-old");
 			const userCurrentPath = join(agentDir, "npm", "node_modules", "user-current");
 			const userUnknownPath = join(agentDir, "npm", "node_modules", "user-unknown");

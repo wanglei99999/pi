@@ -9,6 +9,8 @@
  * - Responses: JSON objects with `type: "response"`, `command`, `success`, and optional `data`/`error`
  * - Events: AgentSessionEvent objects streamed as they occur
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
+ *
+ * stdout 是协议专用通道，每个对象序列化为单行 JSON；请求 id 只关联命令响应，事件可在响应前后异步穿插。
  */
 
 import * as crypto from "node:crypto";
@@ -49,6 +51,7 @@ export type {
 /**
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
+ * 进入后接管 stdout，调用方必须只通过 JSONL 协议消费输出；普通诊断不得混入该通道。
  */
 export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<never> {
 	takeOverStdout();
@@ -57,6 +60,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	let unsubscribeBackpressure: (() => void) | undefined;
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
+		// 所有响应、事件与 UI 请求共用同一串行化入口，确保每个协议帧恰好占一行。
 		writeRawStdout(serializeJsonLine(obj));
 	};
 
@@ -76,6 +80,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	};
 
 	// Pending extension UI requests waiting for response
+	// UI 请求使用独立随机 id 关联客户端回复，不与命令请求 id 空间耦合。
 	const pendingExtensionRequests = new Map<
 		string,
 		{ resolve: (value: any) => void; reject: (error: Error) => void }
@@ -86,7 +91,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	let shuttingDown = false;
 	const signalCleanupHandlers: Array<() => void> = [];
 
-	/** Helper for dialog methods with signal/timeout support */
+	/**
+	 * Helper for dialog methods with signal/timeout support
+	 * 中止或超时按各控件默认值结算，并同步移除 pending 映射与监听器，避免迟到回复重复完成 Promise。
+	 */
 	function createDialogPromise<T>(
 		opts: ExtensionUIDialogOptions | undefined,
 		defaultValue: T,
@@ -100,6 +108,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
 			const cleanup = () => {
+				// cleanup 对响应、取消和超时共用，保证每条 UI 请求只完成一次。
 				if (timeoutId) clearTimeout(timeoutId);
 				opts?.signal?.removeEventListener("abort", onAbort);
 				pendingExtensionRequests.delete(id);
@@ -119,6 +128,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			}
 
 			pendingExtensionRequests.set(id, {
+				// 先登记关联再输出请求，避免同进程宿主极快响应时找不到 pending 项。
 				resolve: (response: RpcExtensionUIResponse) => {
 					cleanup();
 					resolve(parseResponse(response));
@@ -131,6 +141,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 	/**
 	 * Create an extension UI context that uses the RPC protocol.
+	 * 客户端可实现对话框和部分无状态 UI 操作；依赖 TUI 组件、同步读取或终端原始输入的能力明确降级。
 	 */
 	const createExtensionUIContext = (): ExtensionUIContext => ({
 		select: (title, options, opts) =>
@@ -150,6 +161,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 		notify(message: string, type?: "info" | "warning" | "error"): void {
 			// Fire and forget - no response needed
+			// 通知无返回值，因此只发出事件，不占用 pendingExtensionRequests。
 			output({
 				type: "extension_ui_request",
 				id: crypto.randomUUID(),
@@ -193,6 +205,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 		setWidget(key: string, content: unknown, options?: ExtensionWidgetOptions): void {
 			// Only support string arrays in RPC mode - factory functions are ignored
+			// 组件工厂包含不可序列化的函数和 TUI 引用，RPC 仅桥接纯字符串行。
 			if (content === undefined || Array.isArray(content)) {
 				output({
 					type: "extension_ui_request",
@@ -247,6 +260,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		getEditorText(): string {
 			// Synchronous method can't wait for RPC response
 			// Host should track editor state locally if needed
+			// 同步扩展 API 无法跨进程等待，宿主若需要一致状态必须自行镜像 editor 内容。
 			return "";
 		},
 
@@ -310,10 +324,12 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	});
 
 	runtimeHost.setRebindSession(async () => {
+		// runtimeHost 替换 session 后要求 RPC 层重新绑定扩展上下文与事件订阅。
 		await rebindSession();
 	});
 
 	const rebindSession = async (): Promise<void> => {
+		// 每次会话替换都使用新的 AgentSession，旧订阅必须先撤销以防重复事件和失效上下文。
 		session = runtimeHost.session;
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
@@ -352,12 +368,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
 		unsubscribe = session.subscribe((event) => {
+			// 会话事件原样进入 JSONL 流；agent_settled 同时作为延迟优雅关闭的安全点。
 			output(event);
 			if (event.type === "agent_settled") {
 				void checkShutdownRequested();
 			}
 		});
 		unsubscribeBackpressure = session.agent.subscribe(async () => {
+			// 在 Agent 继续产生事件前等待 stdout 排空，防止慢客户端导致无界内存增长。
 			await waitForRawStdoutBackpressure();
 		});
 	};
@@ -382,6 +400,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	registerSignalHandlers();
 
 	// Handle a single command
+	// 命令按 type 分派并返回统一 RpcResponse；需要流式运行的 prompt 自行异步发送最终 preflight 响应。
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse | undefined> => {
 		const id = command.id;
 
@@ -393,6 +412,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			case "prompt": {
 				// Start prompt handling immediately, but emit the authoritative response only after
 				// prompt preflight succeeds. Queued and immediately handled prompts also count as success.
+				// 不等待整轮生成；只有输入扩展、资源等 preflight 成功后才确认命令，后续内容通过事件流输出。
 				let preflightSucceeded = false;
 				void session
 					.prompt(command.message, {
@@ -433,6 +453,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				const options = command.parentSession ? { parentSession: command.parentSession } : undefined;
 				const result = await runtimeHost.newSession(options);
 				if (!result.cancelled) {
+					// 会话实际替换后重新绑定扩展 UI 和事件源；取消时继续沿用当前 session。
 					await rebindSession();
 				}
 				return success(id, "new_session", result);
@@ -613,6 +634,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				const sessionManager = session.sessionManager;
 				let entries = sessionManager.getEntries();
 				if (command.since !== undefined) {
+					// since 是排他游标，响应只包含该条目之后的新追加记录，并同时返回当前 leaf。
 					const sinceIndex = entries.findIndex((e) => e.id === command.since);
 					if (sinceIndex === -1) {
 						return error(id, "get_entries", `Entry not found: ${command.since}`);
@@ -696,11 +718,13 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	/**
 	 * Check if shutdown was requested and perform shutdown if so.
 	 * Called after handling each command when waiting for the next command.
+	 * 扩展发起 shutdown 时先设置标志，待 agent_settled 或当前命令结束后再释放资源，避免截断运行中事件。
 	 */
 	let detachInput = () => {};
 
 	async function shutdown(exitCode = 0, signal?: NodeJS.Signals): Promise<never> {
 		if (shuttingDown) {
+			// 重入关闭不再重复等待清理，直接使用本次退出码终止。
 			process.exit(exitCode);
 		}
 		shuttingDown = true;
@@ -710,6 +734,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
 		await runtimeHost.dispose();
+		// 先释放 session、扩展与受管资源，再停止 stdin；非 SIGTERM 路径额外冲刷协议输出。
 		detachInput();
 		process.stdin.pause();
 		if (signal !== "SIGTERM") {
@@ -740,6 +765,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		}
 
 		// Handle extension UI responses
+		// UI 回复不是普通命令，不生成 RpcResponse；只结算对应的扩展 UI Promise。
 		if (
 			typeof parsed === "object" &&
 			parsed !== null &&
@@ -764,6 +790,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			}
 			await checkShutdownRequested();
 		} catch (commandError: unknown) {
+			// 单条命令错误转换为失败响应，不终止 RPC 服务或影响其他已进入处理的命令。
 			output(
 				error(
 					command.id,
@@ -782,6 +809,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 	detachInput = (() => {
 		const detachJsonl = attachJsonlLineReader(process.stdin, (line) => {
+			// 每行独立启动异步调度，允许多个请求并发；响应依靠 id 而不是到达顺序关联。
 			void handleInputLine(line);
 		});
 		return () => {
@@ -791,5 +819,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	})();
 
 	// Keep process alive forever
+	// 生命周期由 stdin EOF、信号或扩展 shutdown 驱动，主 Promise 本身不会自然完成。
 	return new Promise(() => {});
 }

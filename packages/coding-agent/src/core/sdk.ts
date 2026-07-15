@@ -32,14 +32,23 @@ import {
 } from "./tools/index.ts";
 
 export interface CreateAgentSessionOptions {
-	/** Working directory for project-local discovery. Default: process.cwd() */
+	/**
+	 * Working directory for project-local discovery. Default: process.cwd()
+	 * cwd 同时决定项目资源发现与默认会话目录；传入 sessionManager 时优先沿用其工作目录。
+	 */
 	cwd?: string;
 	/** Global config directory. Default: ~/.pi/agent */
 	agentDir?: string;
 
-	/** Auth storage for credentials. Default: AuthStorage.create(agentDir/auth.json) */
+	/**
+	 * Auth storage for credentials. Default: AuthStorage.create(agentDir/auth.json)
+	 * 自定义 AuthStorage 时，调用方负责其凭据来源、OAuth provider 与持久化生命周期。
+	 */
 	authStorage?: AuthStorage;
-	/** Model registry. Default: ModelRegistry.create(authStorage, agentDir/models.json) */
+	/**
+	 * Model registry. Default: ModelRegistry.create(authStorage, agentDir/models.json)
+	 * 自定义 ModelRegistry 应与同一 AuthStorage 配套，否则模型可用性与实际请求鉴权可能不一致。
+	 */
 	modelRegistry?: ModelRegistry;
 
 	/** Model to use. Default: from settings, else first available */
@@ -63,6 +72,8 @@ export interface CreateAgentSessionOptions {
 	 * When omitted, pi enables the default built-in tools (read, bash, edit, write)
 	 * and leaves extension/custom tools enabled unless `noTools` changes that default.
 	 * When provided, only the listed tool names are enabled.
+	 *
+	 * 显式 allowlist 会同时约束内置与扩展工具；随后 excludeTools 再执行最终剔除。
 	 */
 	tools?: string[];
 	/** Optional denylist of tool names to disable. Applies after `tools` when both are provided. */
@@ -70,7 +81,10 @@ export interface CreateAgentSessionOptions {
 	/** Custom tools to register (in addition to built-in tools). */
 	customTools?: ToolDefinition[];
 
-	/** Resource loader. When omitted, DefaultResourceLoader is used. */
+	/**
+	 * Resource loader. When omitted, DefaultResourceLoader is used.
+	 * 传入自定义 loader 时应由调用方预先完成 reload；SDK 只自动加载自己创建的默认 loader。
+	 */
 	resourceLoader?: ResourceLoader;
 
 	/** Session manager. Default: SessionManager.create(cwd) */
@@ -82,7 +96,10 @@ export interface CreateAgentSessionOptions {
 	sessionStartEvent?: SessionStartEvent;
 }
 
-/** Result from createAgentSession */
+/**
+ * Result from createAgentSession
+ * session 已完成运行时装配；extensionsResult 供交互层继续绑定 UI 上下文，而非再次加载扩展。
+ */
 export interface CreateAgentSessionResult {
 	/** The created session */
 	session: AgentSession;
@@ -132,6 +149,9 @@ function getDefaultAgentDir(): string {
 /**
  * Create an AgentSession with the specified options.
  *
+ * 该工厂负责组合配置、会话、资源、模型、工具与扩展钩子，但不会替调用方启动交互循环；
+ * 返回后由调用方驱动 session，并在不再使用时遵循 AgentSession 的清理生命周期。
+ *
  * @example
  * ```typescript
  * // Minimal - uses defaults
@@ -170,6 +190,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	let resourceLoader = options.resourceLoader;
 
 	// Use provided or create AuthStorage and ModelRegistry
+	// 只有显式 agentDir 才覆盖默认凭据/模型路径；否则各管理器使用自身标准位置。
 	const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;
 	const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
 	const authStorage = options.authStorage ?? AuthStorage.create(authPath);
@@ -179,12 +200,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir));
 
 	if (!resourceLoader) {
+		// 默认 loader 在会话构造前完成首次发现，确保扩展、技能、提示词和主题已形成一致快照。
 		resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
 		await resourceLoader.reload();
 		time("resourceLoader.reload");
 	}
 
 	// Check if session has existing data to restore
+	// 是否恢复以会话上下文中存在消息为准；空会话即使已有文件也按新会话初始化。
 	const existingSession = sessionManager.buildSessionContext();
 	const hasExistingSession = existingSession.messages.length > 0;
 	const hasThinkingEntry = sessionManager.getBranch().some((entry) => entry.type === "thinking_level_change");
@@ -193,6 +216,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	let modelFallbackMessage: string | undefined;
 
 	// If session has data, try to restore model from it
+	// 保存模型只有仍存在且已配置鉴权时才可恢复，否则继续走当前配置的模型选择流程。
 	if (!model && hasExistingSession && existingSession.model) {
 		const restoredModel = modelRegistry.find(existingSession.model.provider, existingSession.model.modelId);
 		if (restoredModel && modelRegistry.hasConfiguredAuth(restoredModel)) {
@@ -204,6 +228,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	// If still no model, use findInitialModel (checks settings default, then provider defaults)
+	// SDK 不使用交互层 scopedModels 做初选；优先设置默认值，再退到 registry 中可用的 provider 默认模型。
 	if (!model) {
 		const result = await findInitialModel({
 			scopedModels: [],
@@ -224,6 +249,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	let thinkingLevel = options.thinkingLevel;
 
 	// If session has data, restore thinking level from it
+	// 旧会话没有显式 thinking 记录时采用当前设置默认值，避免把缺失字段误判为历史选择。
 	if (thinkingLevel === undefined && hasExistingSession) {
 		thinkingLevel = hasThinkingEntry
 			? (existingSession.thinkingLevel as ThinkingLevel)
@@ -236,6 +262,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	// Clamp to model capabilities
+	// 无模型时强制关闭推理；有模型时把请求级别收敛到该模型实际支持的范围。
 	if (!model) {
 		thinkingLevel = "off";
 	} else {
@@ -249,13 +276,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const initialActiveToolNames: string[] = (
 		options.tools ? [...options.tools] : options.noTools ? [] : defaultActiveToolNames
 	).filter((name) => !excludedToolNameSet?.has(name));
+	// initialActiveToolNames 是启动快照；AgentSession 后续还会结合资源中的扩展工具完成最终解析。
 
 	let agent: Agent;
 
 	// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
+	// 在发送给 provider 的最后转换阶段再次过滤图片，防止工具结果或恢复消息绕过更早的输入检查。
 	const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
 		const converted = convertToLlm(messages);
 		// Check setting dynamically so mid-session changes take effect
+		// 每次转换重新读取设置，使会话运行期间切换 blockImages 无需重建 Agent。
 		if (!settingsManager.getBlockImages()) {
 			return converted;
 		}
@@ -309,6 +339,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
 			// SDKs treat timeout=0 as 0ms (immediate timeout), not "no timeout".
 			// Use max int32 to effectively disable the timeout.
+			// 将配置语义中的 0 映射为最大计时器值，避免底层 SDK 把它解释为立即超时。
 			const effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs;
 			const timeoutMs = options?.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs;
 			const websocketConnectTimeoutMs =
@@ -322,6 +353,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			);
 			// Let extensions inject/adjust per-request headers (e.g. tracing, session correlation)
 			// after static assembly, before the provider HTTP call.
+			// 扩展看到的是已合并的最终 header，并可在每次请求发出前继续修改或删除字段。
 			const headerRunner = extensionRunnerRef.current;
 			if (headerRunner?.hasHandlers("before_provider_headers")) {
 				headers = await headerRunner.emitBeforeProviderHeaders(headers ?? {});
@@ -369,6 +401,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	});
 
 	// Restore messages if session has existing data
+	// 恢复时直接使用 SessionManager 构建的上下文；缺失 thinking 记录会补写一次以便后续继续准确恢复。
 	if (hasExistingSession) {
 		agent.state.messages = existingSession.messages;
 		if (!hasThinkingEntry) {
@@ -376,6 +409,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 	} else {
 		// Save initial model and thinking level for new sessions so they can be restored on resume
+		// 新会话在首次提示前就持久化选择，保证即使尚无消息也能在后续写入后保持一致元数据。
 		if (model) {
 			sessionManager.appendModelChange(model.provider, model.id);
 		}
@@ -383,6 +417,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	const session = new AgentSession({
+		// AgentSession 接管资源/扩展 runner 与工具集合的后续生命周期，工厂只负责提供初始依赖和策略。
 		agent,
 		sessionManager,
 		settingsManager,

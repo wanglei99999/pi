@@ -1,5 +1,6 @@
 /**
  * Reusable countdown timer for dialog components.
+ * 对话框组件复用的倒计时器，每秒更新剩余时间并请求 TUI 重绘。
  */
 
 import type { TUI } from "@earendil-works/pi-tui";
@@ -16,6 +17,7 @@ export class CountdownTimer {
 		this.onTick = onTick;
 		this.onExpire = onExpire;
 		this.remainingSeconds = Math.ceil(timeoutMs / 1000);
+		// 构造时立即报告初始秒数，使 UI 无需等待首个 interval 才显示倒计时。
 		this.onTick(this.remainingSeconds);
 
 		this.intervalId = setInterval(() => {
@@ -24,6 +26,7 @@ export class CountdownTimer {
 			this.tui?.requestRender();
 
 			if (this.remainingSeconds <= 0) {
+				// 先释放 interval 再触发过期回调，避免回调重入时残留计时器。
 				this.dispose();
 				this.onExpire();
 			}

@@ -52,6 +52,7 @@ export interface BashToolDetails {
 /**
  * Pluggable operations for the bash tool.
  * Override these to delegate command execution to remote systems (for example SSH).
+ * 自定义实现必须保持流式 onData、AbortSignal 和 timeout 语义，否则工具层无法正确更新、取消或报告结果。
  */
 export interface BashOperations {
 	/**
@@ -78,6 +79,7 @@ export interface BashOperations {
  *
  * This is useful for extensions that intercept user_bash and still want pi's
  * standard local shell behavior while wrapping or rewriting commands.
+ * 本地后端负责平台 shell 选择、环境继承、进程树终止和 stdout/stderr 合流。
  */
 export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
 	return {
@@ -87,6 +89,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 				throw new Error("aborted");
 			}
 			const shellConfig = getShellConfig(options?.shellPath);
+			// shellConfig 决定命令通过 argv 还是 stdin 传输，避免 legacy WSL 与普通 bash 的转义差异。
 			try {
 				await fsAccess(cwd, constants.F_OK);
 			} catch {
@@ -102,10 +105,12 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 				windowsHide: true,
 			});
 			if (commandFromStdin) {
+				// stdin 写入错误可能由进程提前退出触发，最终退出状态由 waitForChildProcess 统一判断。
 				child.stdin?.on("error", () => {});
 				child.stdin?.end(command);
 			}
 			if (child.pid) trackDetachedChildPid(child.pid);
+			// Unix detached 进程形成独立进程组，便于取消/超时时连同后台子进程一起清理。
 			let timedOut = false;
 			let timeoutHandle: NodeJS.Timeout | undefined;
 			const onAbort = () => {
@@ -114,6 +119,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 
 			try {
 				// Set timeout if provided.
+				// timeout 只在显式提供时启用，到期后终止整个进程树并在输出收尾后转换为工具错误。
 				if (timeoutMs !== undefined) {
 					timeoutHandle = setTimeout(() => {
 						timedOut = true;
@@ -121,15 +127,18 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 					}, timeoutMs);
 				}
 				// Stream stdout and stderr.
+				// 两个通道按到达顺序写入同一累加器，保留用户在终端中看到的交错输出。
 				child.stdout?.on("data", onData);
 				child.stderr?.on("data", onData);
 				// Handle abort signal by killing the entire process tree.
+				// AbortSignal 与超时共用进程树终止路径，但最终错误文本分别报告取消或超时。
 				if (signal) {
 					if (signal.aborted) onAbort();
 					else signal.addEventListener("abort", onAbort, { once: true });
 				}
 				// Handle shell spawn errors and wait for the process to terminate without hanging
 				// on inherited stdio handles held by detached descendants.
+				// 后台进程可能继续持有管道；等待辅助函数以主 shell 退出为准，避免工具调用永久挂起。
 				const exitCode = await waitForChildProcess(child);
 				if (signal?.aborted) {
 					throw new Error("aborted");
@@ -139,6 +148,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 				}
 				return { exitCode };
 			} finally {
+				// 无论正常退出、取消、超时或 spawn 失败，都撤销 pid 跟踪、定时器和 signal 监听。
 				if (child.pid) untrackDetachedChildPid(child.pid);
 				if (timeoutHandle) clearTimeout(timeoutHandle);
 				if (signal) signal.removeEventListener("abort", onAbort);
@@ -156,6 +166,7 @@ export interface BashSpawnContext {
 export type BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext;
 
 function resolveSpawnContext(command: string, cwd: string, spawnHook?: BashSpawnHook): BashSpawnContext {
+	// hook 接收独立环境副本，可重写命令、目录或变量而不修改父进程 process.env。
 	const baseContext: BashSpawnContext = { command, cwd, env: { ...getShellEnv() } };
 	return spawnHook ? spawnHook(baseContext) : baseContext;
 }
@@ -224,6 +235,7 @@ function rebuildBashResultRenderComponent(
 	const truncation = result.details?.truncation;
 	const fullOutputPath = result.details?.fullOutputPath;
 	if (!options.isPartial && truncation?.truncated && fullOutputPath && output.endsWith("]")) {
+		// 最终渲染器自行展示结构化截断警告，先移除 execute 文本尾部的同类提示以避免重复。
 		const footerStart = output.lastIndexOf("\n\n[");
 		if (footerStart !== -1 && output.slice(footerStart).includes(fullOutputPath)) {
 			output = output.slice(0, footerStart).trimEnd();
@@ -239,6 +251,7 @@ function rebuildBashResultRenderComponent(
 		if (options.expanded) {
 			component.addChild(new Text(`\n${styledOutput}`, 0, 0));
 		} else {
+			// 折叠态按终端视觉行截取最后几行，并按宽度缓存；窗口变化时重新计算软换行。
 			component.addChild({
 				render: (width: number) => {
 					if (state.cachedLines === undefined || state.cachedWidth !== width) {
@@ -309,8 +322,10 @@ export function createBashToolDefinition(
 			_ctx?,
 		) {
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
+			// prefix 与用户命令用换行组合，在同一 shell 会话中执行，从而共享环境和工作目录变化。
 			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
 			const output = new OutputAccumulator({ tempFilePrefix: "pi-bash" });
+			// 累加器持续保留尾部预览；一旦超限则把完整流写入临时文件供结果提示引用。
 			let acceptingOutput = true;
 			let updateTimer: NodeJS.Timeout | undefined;
 			let updateDirty = false;
@@ -321,6 +336,7 @@ export function createBashToolDefinition(
 				updateDirty = false;
 				lastUpdateAt = Date.now();
 				const snapshot = output.snapshot({ persistIfTruncated: true });
+				// 流式快照也允许建立完整输出文件，保证用户在长命令运行中即可访问未截断内容。
 				onUpdate({
 					content: [{ type: "text", text: snapshot.content || "" }],
 					details: {
@@ -338,6 +354,7 @@ export function createBashToolDefinition(
 			};
 
 			const scheduleOutputUpdate = () => {
+				// 高频 stdout/stderr 合并为最多每 100ms 一次 UI 更新，降低重绘和临时文件快照开销。
 				if (!onUpdate) return;
 				updateDirty = true;
 				const delay = BASH_UPDATE_THROTTLE_MS - (Date.now() - lastUpdateAt);
@@ -357,12 +374,14 @@ export function createBashToolDefinition(
 			}
 
 			const handleData = (data: Buffer) => {
+				// finishOutput 后拒绝迟到 data，防止关闭临时文件后继续写入或触发部分更新。
 				if (!acceptingOutput) return;
 				output.append(data);
 				scheduleOutputUpdate();
 			};
 
 			const finishOutput = async () => {
+				// 停止接收后先完成 UTF-8/行截断状态，再发最后一次更新并关闭完整输出文件。
 				acceptingOutput = false;
 				output.finish();
 				clearUpdateTimer();
@@ -381,6 +400,7 @@ export function createBashToolDefinition(
 					const startLine = truncation.totalLines - truncation.outputLines + 1;
 					const endLine = truncation.totalLines;
 					if (truncation.lastLinePartial) {
+						// 超长单行只保留其末尾字节，并明确给出该行总大小与完整文件路径。
 						const lastLineSize = formatSize(output.getLastLineBytes());
 						text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${snapshot.fullOutputPath}]`;
 					} else if (truncation.truncatedBy === "lines") {
@@ -405,6 +425,7 @@ export function createBashToolDefinition(
 					});
 					exitCode = result.exitCode;
 				} catch (err) {
+					// 取消和超时仍先收尾已产生输出，再把状态附加到错误，避免丢失诊断上下文。
 					const snapshot = await finishOutput();
 					const { text } = formatOutput(snapshot, "");
 					if (err instanceof Error && err.message === "aborted") {
@@ -440,6 +461,7 @@ export function createBashToolDefinition(
 		renderResult(result, options, _theme, context) {
 			const state = context.state;
 			if (state.startedAt !== undefined && options.isPartial && !state.interval) {
+				// 运行期间每秒仅刷新耗时标签；输出本身由 onUpdate 的节流机制驱动。
 				state.interval = setInterval(() => context.invalidate(), 1000);
 			}
 			if (!options.isPartial || context.isError) {

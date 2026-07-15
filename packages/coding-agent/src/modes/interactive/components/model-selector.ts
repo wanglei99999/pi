@@ -24,6 +24,7 @@ interface ModelItem {
 
 interface ScopedModelItem {
 	model: Model<any>;
+	// scoped 配置可携带推理级别；选择器仅用模型身份构建范围，级别应用由上层会话负责。
 	thinkingLevel?: string;
 }
 
@@ -32,10 +33,12 @@ type ModelScope = "all" | "scoped";
 /**
  * Component that renders a model selector with search
  */
+/** 支持模糊搜索、all/scoped 范围切换和当前模型标记的模型选择组件。 */
 export class ModelSelectorComponent extends Container implements Focusable {
 	private searchInput: Input;
 
 	// Focusable implementation - propagate to searchInput for IME cursor positioning
+	// Focusable 状态转发给搜索 Input，使 IME 候选窗定位正确。
 	private _focused = false;
 	get focused(): boolean {
 		return this._focused;
@@ -84,10 +87,12 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.onCancelCallback = onCancel;
 
 		// Add top border
+		// 顶部边框和间距构成选择器外框。
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
 
 		// Add hint about model filtering
+		// 存在 scoped 模型时显示范围切换；否则提示可用模型受已配置 provider 限制。
 		if (scopedModels.length > 0) {
 			this.scopeText = new Text(this.getScopeText(), 0, 0);
 			this.addChild(this.scopeText);
@@ -100,12 +105,14 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.addChild(new Spacer(1));
 
 		// Create search input
+		// 搜索框可恢复初始查询，并在 Enter 时选择当前过滤结果。
 		this.searchInput = new Input();
 		if (initialSearchInput) {
 			this.searchInput.setValue(initialSearchInput);
 		}
 		this.searchInput.onSubmit = () => {
 			// Enter on search input selects the first filtered item
+			// 搜索输入提交时选择 selectedIndex 指向的候选。
 			if (this.filteredModels[this.selectedIndex]) {
 				this.handleSelect(this.filteredModels[this.selectedIndex].model);
 			}
@@ -115,15 +122,18 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.addChild(new Spacer(1));
 
 		// Create list container
+		// 列表容器在搜索、范围或选择变化时整体重建。
 		this.listContainer = new Container();
 		this.addChild(this.listContainer);
 
 		this.addChild(new Spacer(1));
 
 		// Add bottom border
+		// 底部边框结束选择器外框。
 		this.addChild(new DynamicBorder());
 
 		// Load models and do initial render
+		// 模型异步加载完成后应用初始搜索，并请求 TUI 重绘。
 		this.loadModels().then(() => {
 			if (initialSearchInput) {
 				this.filterModels(initialSearchInput);
@@ -131,6 +141,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 				this.updateList();
 			}
 			// Request re-render after models are loaded
+			// 加载前列表可能为空，因此完成后显式请求渲染。
 			this.tui.requestRender();
 		});
 	}
@@ -139,16 +150,20 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		let models: ModelItem[];
 
 		// Refresh to pick up any changes to models.json
+		// 每次打开选择器先刷新 registry，以读取 models.json 和 provider 状态变化。
 		this.modelRegistry.refresh();
 
 		// Check for models.json errors
+		// 配置错误保留为可见错误信息，但不阻止继续加载内置可用模型。
 		const loadError = this.modelRegistry.getError();
 		if (loadError) {
 			this.errorMessage = loadError;
 		}
 
 		// Load available models (built-in models still work even if models.json failed)
+		// 从 registry 异步获取当前可用模型；models.json 失败时内置模型仍可工作。
 		try {
+			// provider 认证和可用性判断封装在 ModelRegistry 中，组件只展示其返回的模型集合。
 			const availableModels = await this.modelRegistry.getAvailable();
 			models = availableModels.map((model: Model<any>) => ({
 				provider: model.provider,
@@ -184,6 +199,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private sortModels(models: ModelItem[]): ModelItem[] {
 		const sorted = [...models];
 		// Sort: current model first, then by provider
+		// 当前模型固定排在最前，其余按 provider 排序以形成稳定分组感。
 		sorted.sort((a, b) => {
 			const aIsCurrent = modelsAreEqual(this.currentModel, a.model);
 			const bIsCurrent = modelsAreEqual(this.currentModel, b.model);
@@ -205,6 +221,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	}
 
 	private setScope(scope: ModelScope): void {
+		// 切换范围后优先重新定位当前模型，再重新应用现有搜索查询。
 		if (this.scope === scope) return;
 		this.scope = scope;
 		this.activeModels = this.scope === "scoped" ? this.scopedModelItems : this.allModels;
@@ -217,6 +234,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	}
 
 	private filterModels(query: string): void {
+		// 模糊搜索同时匹配模型 ID、provider 和显示名称。
 		this.filteredModels = query
 			? fuzzyFilter(this.activeModels, query, ({ id, provider, model }) =>
 					getModelSelectorSearchText({ id, provider, name: model.name }),
@@ -227,6 +245,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	}
 
 	private updateList(): void {
+		// 列表最多展示十项，并围绕当前选择计算垂直窗口。
 		this.listContainer.clear();
 
 		const maxVisible = 10;
@@ -237,6 +256,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		const endIndex = Math.min(startIndex + maxVisible, this.filteredModels.length);
 
 		// Show visible slice of filtered models
+		// 可见项显示 provider 徽标，当前会话模型额外显示勾选标记。
 		for (let i = startIndex; i < endIndex; i++) {
 			const item = this.filteredModels[i];
 			if (!item) continue;
@@ -262,14 +282,17 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		}
 
 		// Add scroll indicator if needed
+		// 过滤结果超出窗口时显示当前索引和总数。
 		if (startIndex > 0 || endIndex < this.filteredModels.length) {
 			const scrollInfo = theme.fg("muted", `  (${this.selectedIndex + 1}/${this.filteredModels.length})`);
 			this.listContainer.addChild(new Text(scrollInfo, 0, 0));
 		}
 
 		// Show error message or "no results" if empty
+		// 错误优先于空结果提示；正常列表底部显示选中模型的名称。
 		if (this.errorMessage) {
 			// Show error in red
+			// 多行 registry 错误逐行使用 error 颜色展示。
 			const errorLines = this.errorMessage.split("\n");
 			for (const line of errorLines) {
 				this.listContainer.addChild(new Text(theme.fg("error", line), 0, 0));
@@ -296,18 +319,21 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			return;
 		}
 		// Up arrow - wrap to bottom when at top
+		// 向上导航到顶后循环到最后一个候选。
 		if (kb.matches(keyData, "tui.select.up")) {
 			if (this.filteredModels.length === 0) return;
 			this.selectedIndex = this.selectedIndex === 0 ? this.filteredModels.length - 1 : this.selectedIndex - 1;
 			this.updateList();
 		}
 		// Down arrow - wrap to top when at bottom
+		// 向下导航到底后循环到第一个候选。
 		else if (kb.matches(keyData, "tui.select.down")) {
 			if (this.filteredModels.length === 0) return;
 			this.selectedIndex = this.selectedIndex === this.filteredModels.length - 1 ? 0 : this.selectedIndex + 1;
 			this.updateList();
 		}
 		// Enter
+		// 确认键选择当前高亮模型。
 		else if (kb.matches(keyData, "tui.select.confirm")) {
 			const selectedModel = this.filteredModels[this.selectedIndex];
 			if (selectedModel) {
@@ -315,10 +341,12 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			}
 		}
 		// Escape or Ctrl+C
+		// 取消键关闭选择器，不改变默认模型。
 		else if (kb.matches(keyData, "tui.select.cancel")) {
 			this.onCancelCallback();
 		}
 		// Pass everything else to search input
+		// 其余按键交给搜索框，并即时刷新过滤列表。
 		else {
 			this.searchInput.handleInput(keyData);
 			this.filterModels(this.searchInput.getValue());
@@ -327,6 +355,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 	private handleSelect(model: Model<any>): void {
 		// Save as new default
+		// 选择后同时持久化 provider/model 默认值并通知调用方切换会话模型。
 		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
 		this.onSelectCallback(model);
 	}

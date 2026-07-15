@@ -45,6 +45,7 @@ function normalizePathPart(value: string): string {
 }
 
 function resolveRepositoryPath(targetPath: string): string | undefined {
+	// 相对链接以 coding-agent changelog 所在目录为基准解析，并拒绝逃逸仓库根目录的路径。
 	const normalizedTarget = normalizePathPart(targetPath);
 	const joined = normalizedTarget.startsWith("/")
 		? path.posix.normalize(normalizedTarget.replace(/^\/+/, ""))
@@ -58,6 +59,7 @@ function resolveRepositoryPath(targetPath: string): string | undefined {
 }
 
 function isDirectoryTarget(originalPath: string, repositoryPath: string): boolean {
+	// 显式尾斜杠或无扩展名目标按目录处理，以选择 GitHub tree 路由。
 	if (originalPath.endsWith("/")) {
 		return true;
 	}
@@ -67,6 +69,7 @@ function isDirectoryTarget(originalPath: string, repositoryPath: string): boolea
 }
 
 function normalizeChangelogLinkTarget(target: string, tag: string): string {
+	// 先把旧仓库地址迁移到当前仓库，再将 main/master 浮动链接固定到对应发布 tag。
 	let canonicalTarget = target.replace(LEGACY_REPO_RE, `https://github.com/${GITHUB_REPO}`);
 	const repoUrl = `https://github.com/${GITHUB_REPO}`;
 
@@ -80,6 +83,7 @@ function normalizeChangelogLinkTarget(target: string, tag: string): string {
 	}
 
 	if (canonicalTarget.startsWith("#") || canonicalTarget.startsWith("//") || URL_SCHEME_RE.test(canonicalTarget)) {
+		// 片段、协议相对 URL 和已有 scheme 的外部链接保持原样。
 		return canonicalTarget;
 	}
 
@@ -94,6 +98,7 @@ function normalizeChangelogLinkTarget(target: string, tag: string): string {
 	}
 
 	const route = isDirectoryTarget(pathPart, repositoryPath) ? "tree" : "blob";
+	// 本地相对链接转换为带发布 tag 的 GitHub blob/tree 地址，使历史 changelog 链接长期稳定。
 	return `https://github.com/${GITHUB_REPO}/${route}/${tag}/${encodeURI(repositoryPath)}${query}${fragment}`;
 }
 
@@ -108,6 +113,7 @@ export function normalizeChangelogLinks(markdown: string, version: string | Chan
  * Parse changelog entries from CHANGELOG.md
  * Scans for ## lines and collects content until next ## or EOF
  */
+/** 扫描二级标题中的语义版本，并收集到下一二级标题或文件末尾的完整内容。 */
 export function parseChangelog(changelogPath: string): ChangelogEntry[] {
 	if (!existsSync(changelogPath)) {
 		return [];
@@ -123,8 +129,10 @@ export function parseChangelog(changelogPath: string): ChangelogEntry[] {
 
 		for (const line of lines) {
 			// Check if this is a version header (## [x.y.z] ...)
+			// 二级标题可能是版本边界，先结算上一条目再尝试解析新版本。
 			if (line.startsWith("## ")) {
 				// Save previous entry if exists
+				// 仅保存已识别版本且包含内容的上一条目。
 				if (currentVersion && currentLines.length > 0) {
 					entries.push({
 						...currentVersion,
@@ -133,6 +141,7 @@ export function parseChangelog(changelogPath: string): ChangelogEntry[] {
 				}
 
 				// Try to parse version from this line
+				// 同时接受带方括号和不带方括号的 x.y.z 标题。
 				const versionMatch = line.match(/##\s+\[?(\d+)\.(\d+)\.(\d+)\]?/);
 				if (versionMatch) {
 					currentVersion = {
@@ -143,16 +152,19 @@ export function parseChangelog(changelogPath: string): ChangelogEntry[] {
 					currentLines = [line];
 				} else {
 					// Reset if we can't parse version
+					// 非版本二级标题终止当前收集，避免内容串入错误条目。
 					currentVersion = null;
 					currentLines = [];
 				}
 			} else if (currentVersion) {
 				// Collect lines for current version
+				// 只在已识别版本期间收集后续行。
 				currentLines.push(line);
 			}
 		}
 
 		// Save last entry
+		// 循环结束后补存没有下一标题触发结算的最后条目。
 		if (currentVersion && currentLines.length > 0) {
 			entries.push({
 				...currentVersion,
@@ -170,6 +182,7 @@ export function parseChangelog(changelogPath: string): ChangelogEntry[] {
 /**
  * Compare versions. Returns: -1 if v1 < v2, 0 if v1 === v2, 1 if v1 > v2
  */
+/** 按 major、minor、patch 依次比较两个 changelog 版本。 */
 export function compareVersions(v1: ChangelogEntry, v2: ChangelogEntry): number {
 	if (v1.major !== v2.major) return v1.major - v2.major;
 	if (v1.minor !== v2.minor) return v1.minor - v2.minor;
@@ -179,8 +192,10 @@ export function compareVersions(v1: ChangelogEntry, v2: ChangelogEntry): number 
 /**
  * Get entries newer than lastVersion
  */
+/** 返回严格晚于 lastVersion 的 changelog 条目。 */
 export function getNewEntries(entries: ChangelogEntry[], lastVersion: string): ChangelogEntry[] {
 	// Parse lastVersion
+	// 缺失或非法的版本段按零处理，构造比较基准。
 	const parts = lastVersion.split(".").map(Number);
 	const last: ChangelogEntry = {
 		major: parts[0] || 0,
@@ -193,4 +208,5 @@ export function getNewEntries(entries: ChangelogEntry[], lastVersion: string): C
 }
 
 // Re-export getChangelogPath from paths.ts for convenience
+// 便捷重导出 changelog 路径解析函数。
 export { getChangelogPath } from "../config.ts";

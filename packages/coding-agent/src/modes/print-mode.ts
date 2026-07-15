@@ -4,6 +4,8 @@
  * Used for:
  * - `pi -p "prompt"` - text output
  * - `pi --mode json "prompt"` - JSON event stream
+ *
+ * 单次执行模式复用完整 AgentSession runtime：text 只输出最终助手文本，json 则把会话头和所有事件写入 stdout。
  */
 
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
@@ -28,6 +30,7 @@ export interface PrintModeOptions {
 /**
  * Run in print (single-shot) mode.
  * Sends prompts to the agent and outputs the result.
+ * 依次发送初始消息和附加消息，处理扩展触发的会话替换，并在结束或信号中断时统一释放 runtime 和后台进程。
  */
 export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: PrintModeOptions): Promise<number> {
 	const { mode, messages = [], initialMessage, initialImages } = options;
@@ -38,6 +41,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	const signalCleanupHandlers: Array<() => void> = [];
 
 	const disposeRuntime = async (): Promise<void> => {
+		// 释放流程幂等，避免正常 finally 与信号处理同时销毁会话。
 		if (disposed) return;
 		disposed = true;
 		unsubscribe?.();
@@ -45,6 +49,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	};
 
 	const registerSignalHandlers = (): void => {
+		// 单次模式没有 TUI 主循环负责清理，需直接处理终止信号和脱离子进程。
 		const signals: NodeJS.Signals[] = ["SIGTERM"];
 		if (process.platform !== "win32") {
 			signals.push("SIGHUP");
@@ -69,6 +74,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	});
 
 	const rebindSession = async (): Promise<void> => {
+		// 扩展命令可能替换会话；每次替换后重新绑定扩展能力并迁移事件订阅。
 		session = runtimeHost.session;
 		await session.bindExtensions({
 			mode: mode === "json" ? "json" : "print",
@@ -103,6 +109,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		unsubscribe?.();
 		unsubscribe = session.subscribe((event) => {
 			if (mode === "json") {
+				// JSON 模式保持一事件一行，供调用方流式解析。
 				writeRawStdout(`${JSON.stringify(event)}\n`);
 			}
 		});

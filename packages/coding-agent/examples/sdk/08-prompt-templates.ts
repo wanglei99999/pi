@@ -2,6 +2,10 @@
  * Prompt Templates
  *
  * File-based templates that inject content when invoked with /templatename.
+ *
+ * 提示词模板:文件形式的 /命令,用户输入 /deploy 时把模板 content
+ * 作为提示词注入。与 skill 的区别:skill 是模型可自主取用的能力说明,
+ * 模板是用户显式触发的一段固定提示词。
  */
 
 import {
@@ -14,6 +18,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 // Define custom templates
+// 纯内存构造模板(套路同 04 篇的虚拟 skill):路径是虚拟的,来源标记为 sdk
 const deployTemplate: PromptTemplate = {
 	name: "deploy",
 	description: "Deploy the application",
@@ -29,6 +34,7 @@ const deployTemplate: PromptTemplate = {
 const loader = new DefaultResourceLoader({
 	cwd: process.cwd(),
 	agentDir: getAgentDir(),
+	// 覆盖钩子:自动发现的模板 + 自定义模板
 	promptsOverride: (current) => ({
 		prompts: [...current.prompts, deployTemplate],
 		diagnostics: current.diagnostics,

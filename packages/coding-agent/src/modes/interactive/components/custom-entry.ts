@@ -8,6 +8,10 @@ import { theme } from "../theme/theme.ts";
  * Component that renders a custom session entry from extensions.
  * The host owns transcript spacing; renderer output should provide only its content.
  */
+/**
+ * 渲染扩展所提供自定义会话条目的组件。
+ * 会话记录中的间距由宿主统一管理，扩展渲染器只需返回条目自身的内容。
+ */
 export class CustomEntryComponent extends Container {
 	private entry: CustomEntry<unknown>;
 	private renderer: EntryRenderer;

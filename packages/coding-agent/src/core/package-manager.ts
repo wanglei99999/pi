@@ -180,6 +180,8 @@ interface ResourceAccumulator {
  *   2  user + settings entry (source: "local", scope: "user")
  *   3  user + auto-discovered (source: "auto", scope: "user")
  *   4  package resource (origin: "package")
+ *
+ * 资源最终采用“排序后首次出现者胜出”，因此该排名同时定义了同名资源冲突时的覆盖语义。
  */
 function resourcePrecedenceRank(m: PathMetadata): number {
 	if (m.origin === "package") return 4;
@@ -904,6 +906,7 @@ export class DefaultPackageManager implements PackageManager {
 		const projectSettings = this.settingsManager.getProjectSettings();
 
 		// Collect all packages with scope (project first so cwd resources win collisions)
+		// 先收集项目配置，使后续去重和资源排序都能稳定体现项目级覆盖优先级。
 		const allPackages: Array<{ pkg: PackageSource; scope: SourceScope }> = [];
 		for (const pkg of projectSettings.packages ?? []) {
 			allPackages.push({ pkg, scope: "project" });
@@ -913,6 +916,7 @@ export class DefaultPackageManager implements PackageManager {
 		}
 
 		// Dedupe: project scope wins over global for same package identity
+		// 包身份忽略 npm 版本或 git ref；同一来源在两级配置中出现时通常只解析项目项。
 		const packageSources = this.dedupePackages(allPackages);
 		await this.resolvePackageSources(packageSources, accumulator, onMissing);
 
@@ -1016,6 +1020,7 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	async installAndPersist(source: string, options?: { local?: boolean }): Promise<void> {
+		// 先完成安装再写设置，失败时不会留下指向不存在安装目录的持久配置。
 		await this.install(source, options);
 		this.addSourceToSettings(source, options);
 	}
@@ -1041,6 +1046,7 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	async removeAndPersist(source: string, options?: { local?: boolean }): Promise<boolean> {
+		// 先移除托管内容，再删除配置；本地来源没有托管副本，因此只更新设置。
 		await this.remove(source, options);
 		return this.removeSourceFromSettings(source, options);
 	}
@@ -1089,6 +1095,7 @@ export class DefaultPackageManager implements PackageManager {
 			const parsed = this.parseSource(entry.source);
 			// Pinned npm versions are fixed. Pinned git refs are configured checkout targets,
 			// so include them to reconcile an existing clone when the configured ref changes.
+			// npm 精确版本无需联网更新；git ref 即使固定也需 fetch/reset，以同步该 ref 当前指向或设置变更。
 			if (parsed.type === "npm") {
 				if (!parsed.pinned) {
 					npmCandidates.push({ ...entry, parsed });
@@ -1103,6 +1110,7 @@ export class DefaultPackageManager implements PackageManager {
 			shouldUpdate: await this.shouldUpdateNpmSource(entry.parsed, entry.scope),
 		}));
 		const npmCheckResults = await this.runWithConcurrency(npmCheckTasks, UPDATE_CHECK_CONCURRENCY);
+		// 版本查询受限并发，避免同时对 registry 发起过多请求；真正安装按 scope 合并为单次包管理器事务。
 		const userNpmUpdates: NpmUpdateTarget[] = [];
 		const projectNpmUpdates: NpmUpdateTarget[] = [];
 		for (const result of npmCheckResults) {
@@ -1148,6 +1156,7 @@ export class DefaultPackageManager implements PackageManager {
 			return targetVersion !== installedVersion;
 		} catch {
 			// Preserve existing update behavior when version lookup fails.
+			// 主动更新时查询失败仍尝试安装，让包管理器给出最终错误并保留原有“修复缺失安装”的行为。
 			return true;
 		}
 	}
@@ -1258,6 +1267,7 @@ export class DefaultPackageManager implements PackageManager {
 			}
 
 			const installMissing = async (): Promise<boolean> => {
+				// 离线模式绝不隐式安装；在线时可由调用方决定跳过、报错或补齐缺失来源。
 				if (isOfflineModeEnabled()) return false;
 				if (!onMissing) {
 					await this.installParsedSource(parsed, resolvedScope);
@@ -1274,6 +1284,7 @@ export class DefaultPackageManager implements PackageManager {
 				let installedPath = this.getNpmInstallPath(parsed, resolvedScope);
 				const needsInstall =
 					!existsSync(installedPath) || !(await this.installedNpmMatchesConfiguredVersion(parsed, installedPath));
+				// 范围版本只要求当前安装仍满足约束，不会在每次资源解析时自动追逐最新版本。
 				if (needsInstall) {
 					const installed = await installMissing();
 					if (!installed) continue;
@@ -1290,6 +1301,7 @@ export class DefaultPackageManager implements PackageManager {
 					const installed = await installMissing();
 					if (!installed) continue;
 				} else if (resolvedScope === "temporary" && !parsed.pinned && !isOfflineModeEnabled()) {
+					// 临时未固定 git 来源按会话刷新，但刷新失败会继续使用缓存 checkout，保证启动可恢复。
 					await this.refreshTemporaryGitSource(parsed, resolvedSource);
 				}
 				metadata.baseDir = installedPath;
@@ -1433,6 +1445,7 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private parseSource(source: string): ParsedSource {
+		// 解析顺序是显式 npm 前缀、本地路径、git URL；无法识别的输入按本地路径处理，避免误发网络请求。
 		if (source.startsWith("npm:")) {
 			const spec = source.slice("npm:".length).trim();
 			const { name, version } = this.parseNpmSpec(spec);
@@ -1649,6 +1662,7 @@ export class DefaultPackageManager implements PackageManager {
 		}
 
 		const results: T[] = new Array(tasks.length);
+		// 工作者共享单调索引领取任务，限制并发同时保持返回结果与输入任务顺序一致。
 		let nextIndex = 0;
 		const workerCount = Math.max(1, Math.min(limit, tasks.length));
 
@@ -1672,6 +1686,8 @@ export class DefaultPackageManager implements PackageManager {
 	 * Used to detect when the same package is in both global and project settings.
 	 * For git packages, uses normalized host/path to ensure SSH and HTTPS URLs
 	 * for the same repository are treated as identical.
+	 *
+	 * 本地来源则解析为作用域基准目录下的绝对路径，避免同一相对字符串在用户和项目配置中误判为同包。
 	 */
 	private getPackageIdentity(source: string, scope?: SourceScope): string {
 		const parsed = this.parseSource(source);
@@ -1693,6 +1709,8 @@ export class DefaultPackageManager implements PackageManager {
 	 * Dedupe packages: if same package identity appears in both global and project,
 	 * keep only the project one (project wins). A project entry with autoload=false
 	 * is a delta over the global entry, so both are kept (delta first).
+	 *
+	 * autoload=false 项目项只表达对用户包资源的增量启停，必须与用户安装来源共同保留而非替换。
 	 */
 	private dedupePackages(
 		packages: Array<{ pkg: PackageSource; scope: SourceScope }>,
@@ -1777,6 +1795,7 @@ export class DefaultPackageManager implements PackageManager {
 		// Disable peer dependency resolution for managed installs (npm's --legacy-peer-deps, and
 		// equivalent bun/pnpm settings) so package managers do not install or solve host-provided
 		// @earendil-works/pi-* peers. Stale auto-installed pi peers can otherwise block updates.
+		// pi API 由宿主 loader 提供，托管安装若解析 peer 会产生重复或过期宿主依赖，并可能阻塞后续升级。
 		if (packageManagerName === "bun") {
 			return ["install", ...specs, "--cwd", installRoot, "--omit=peer"];
 		}
@@ -1815,6 +1834,7 @@ export class DefaultPackageManager implements PackageManager {
 	private async installGit(source: GitSource, scope: SourceScope): Promise<void> {
 		const targetDir = this.getGitInstallPath(source, scope);
 		if (existsSync(targetDir)) {
+			// 已有 checkout 走确定性 fetch/reset，而不是再次 clone；固定 ref 与跟踪分支使用各自目标。
 			if (source.ref) {
 				await this.ensureGitRef(targetDir, ["fetch", "origin", source.ref], "FETCH_HEAD");
 				return;
@@ -1857,6 +1877,7 @@ export class DefaultPackageManager implements PackageManager {
 
 	private async ensureGitRef(targetDir: string, fetchArgs: string[], ref: string): Promise<void> {
 		// Fetch only the ref we will reset to, avoiding unrelated branch/tag noise.
+		// 只抓取目标 ref 可缩小网络与磁盘开销，也避免远端无关引用影响更新判断。
 		await this.runCommand("git", fetchArgs, { cwd: targetDir });
 
 		const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
@@ -1875,6 +1896,7 @@ export class DefaultPackageManager implements PackageManager {
 		await this.runCommand("git", ["reset", "--hard", commitRef], { cwd: targetDir });
 
 		// Clean untracked files (extensions should be pristine)
+		// 托管 git 目录不是用户工作区；清理未跟踪文件保证资源与远端提交完全一致，依赖随后重新安装。
 		await this.runCommand("git", ["clean", "-fdx"], { cwd: targetDir });
 
 		const packageJsonPath = join(targetDir, "package.json");
@@ -1893,6 +1915,7 @@ export class DefaultPackageManager implements PackageManager {
 			});
 		} catch {
 			// Keep cached temporary checkout if refresh fails.
+			// 临时来源以可用性优先：网络故障不会删除上次成功缓存。
 		}
 	}
 
@@ -1963,6 +1986,7 @@ export class DefaultPackageManager implements PackageManager {
 		const npmCommand = this.getNpmCommand();
 		const commandKey = [npmCommand.command, ...npmCommand.args].join("\0");
 		if (this.globalNpmRoot && this.globalNpmRootCommandKey === commandKey) {
+			// 缓存绑定完整 npmCommand；切换 npm/bun/pnpm 或包装参数时会重新探测全局根目录。
 			return this.globalNpmRoot;
 		}
 		if (this.getPackageManagerName() === "bun") {
@@ -2014,6 +2038,7 @@ export class DefaultPackageManager implements PackageManager {
 			return managedPath;
 		}
 		const legacyPath = this.getLegacyGlobalNpmInstallPath(source);
+		// 用户作用域优先新托管目录，仅在尚未迁移时兼容读取旧的全局安装位置。
 		return legacyPath && existsSync(legacyPath) ? legacyPath : managedPath;
 	}
 
@@ -2040,6 +2065,7 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private getTemporaryDir(prefix: string, suffix?: string): string {
+		// 稳定哈希让同一临时来源跨调用复用缓存，同时通过 resolveManagedPath 约束在专用根目录内。
 		const root = this.resolveManagedPath(getExtensionTempFolder(this.agentDir), prefix);
 		const hash = createHash("sha256")
 			.update(`${prefix}-${suffix ?? ""}`)
@@ -2049,6 +2075,7 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private resolveManagedPath(root: string, ...parts: string[]): string {
+		// 所有 npm/git 派生路径都需通过根目录包含检查，阻止恶意包名或仓库路径逃逸托管目录。
 		const resolvedRoot = resolve(root);
 		const resolvedPath = resolve(resolvedRoot, ...parts);
 		if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(`${resolvedRoot}${sep}`)) {

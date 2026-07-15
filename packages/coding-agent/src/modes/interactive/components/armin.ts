@@ -1,11 +1,13 @@
 /**
  * Armin says hi! A fun easter egg with animated XBM art.
+ * 组件随机选择一次性动画效果，完成后保留最终帧；dispose 负责停止尚未结束的定时器。
  */
 
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 
 // XBM image: 31x36 pixels, LSB first, 1=background, 0=foreground
+// XBM 每行按字节存储且最低位对应较小 x；这里反转位值，使 0 成为需要绘制的前景像素。
 const WIDTH = 31;
 const HEIGHT = 36;
 const BITS = [
@@ -21,12 +23,14 @@ const BITS = [
 
 const BYTES_PER_ROW = Math.ceil(WIDTH / 8);
 const DISPLAY_HEIGHT = Math.ceil(HEIGHT / 2); // Half-block rendering
+// 每个终端字符组合上下两个像素，因此显示行数约为原图高度的一半。
 
 type Effect = "typewriter" | "scanline" | "rain" | "fade" | "crt" | "glitch" | "dissolve";
 
 const EFFECTS: Effect[] = ["typewriter", "scanline", "rain", "fade", "crt", "glitch", "dissolve"];
 
 // Get pixel at (x, y): true = foreground, false = background
+// 越过底部的奇数补齐像素视为背景，便于半块字符安全读取最后一行。
 function getPixel(x: number, y: number): boolean {
 	if (y >= HEIGHT) return false;
 	const byteIndex = y * BYTES_PER_ROW + Math.floor(x / 8);
@@ -35,6 +39,7 @@ function getPixel(x: number, y: number): boolean {
 }
 
 // Get the character for a cell (2 vertical pixels packed)
+// 根据上下像素组合选择全块、上半块或下半块，在单个终端单元中保留垂直分辨率。
 function getChar(x: number, row: number): string {
 	const upper = getPixel(x, row * 2);
 	const lower = getPixel(x, row * 2 + 1);
@@ -85,6 +90,7 @@ export class ArminComponent implements Component {
 
 	render(width: number): string[] {
 		if (width === this.cachedWidth && this.cachedVersion === this.gridVersion) {
+			// 只有网格版本或终端宽度变化时才重建带颜色的行，动画帧之间避免重复格式化。
 			return this.cachedLines;
 		}
 
@@ -93,12 +99,14 @@ export class ArminComponent implements Component {
 
 		this.cachedLines = this.currentGrid.map((row) => {
 			// Clip row to available width before applying color
+			// 先按字符网格裁剪再加 ANSI 颜色，避免控制序列干扰宽度计算；窄终端只显示左侧可用部分。
 			const clipped = row.slice(0, availableWidth).join("");
 			const padRight = Math.max(0, width - padding - clipped.length);
 			return ` ${theme.fg("accent", clipped)}${" ".repeat(padRight)}`;
 		});
 
 		// Add "ARMIN SAYS HI" at the end
+		// 文案与图像使用相同左边距和右侧填充，使组件宽度始终匹配当前布局。
 		const message = "ARMIN SAYS HI";
 		const msgPadRight = Math.max(0, width - padding - message.length);
 		this.cachedLines.push(` ${theme.fg("accent", message)}${" ".repeat(msgPadRight)}`);
@@ -114,6 +122,7 @@ export class ArminComponent implements Component {
 	}
 
 	private initEffect(): void {
+		// 每种效果只初始化自身状态；tickEffect 随后按同一 effect 判别并解释该结构。
 		switch (this.effect) {
 			case "typewriter":
 				this.effectState = { pos: 0 };
@@ -123,6 +132,7 @@ export class ArminComponent implements Component {
 				break;
 			case "rain":
 				// Track falling position for each column
+				// 每列独立下落并记录已沉积高度，可在不同起始延迟下逐列还原图像。
 				this.effectState = {
 					drops: Array.from({ length: WIDTH }, () => ({
 						y: -Math.floor(Math.random() * DISPLAY_HEIGHT * 2),
@@ -132,6 +142,7 @@ export class ArminComponent implements Component {
 				break;
 			case "fade": {
 				// Shuffle all pixel positions
+				// 预先随机排列坐标，后续每帧顺序取一批即可保证每个单元恰好显现一次。
 				const positions: [number, number][] = [];
 				for (let row = 0; row < DISPLAY_HEIGHT; row++) {
 					for (let x = 0; x < WIDTH; x++) {
@@ -139,6 +150,7 @@ export class ArminComponent implements Component {
 					}
 				}
 				// Fisher-Yates shuffle
+				// 原地 Fisher-Yates 提供均匀排列，不需要在动画过程中重复随机查重。
 				for (let i = positions.length - 1; i > 0; i--) {
 					const j = Math.floor(Math.random() * (i + 1));
 					[positions[i], positions[j]] = [positions[j], positions[i]];
@@ -154,6 +166,7 @@ export class ArminComponent implements Component {
 				break;
 			case "dissolve": {
 				// Start with random noise
+				// 初始噪声覆盖完整网格，再按洗牌坐标逐步替换为目标字符。
 				this.currentGrid = Array.from({ length: DISPLAY_HEIGHT }, () =>
 					Array.from({ length: WIDTH }, () => {
 						const chars = [" ", "░", "▒", "▓", "█", "▀", "▄"];
@@ -179,17 +192,20 @@ export class ArminComponent implements Component {
 
 	private startAnimation(): void {
 		const fps = this.effect === "glitch" ? 60 : 30;
+		// glitch 依赖短暂高频扰动，其余效果以 30fps 降低 TUI 重绘开销。
 		this.interval = setInterval(() => {
 			const done = this.tickEffect();
 			this.updateDisplay();
 			this.ui.requestRender();
 			if (done) {
+				// 完成帧已更新并请求渲染后再停表，确保最终干净图像可见。
 				this.stopAnimation();
 			}
 		}, 1000 / fps);
 	}
 
 	private stopAnimation(): void {
+		// 方法可重复调用，完成回调与组件 dispose 竞争时不会重复清理。
 		if (this.interval) {
 			clearInterval(this.interval);
 			this.interval = null;
@@ -250,6 +266,7 @@ export class ArminComponent implements Component {
 
 		let allSettled = true;
 		this.currentGrid = this.createEmptyGrid();
+		// rain 每帧从空网格重建沉积层和活动落点，避免旧下落字符留下拖影。
 
 		for (let x = 0; x < WIDTH; x++) {
 			const drop = state.drops[x];
@@ -267,6 +284,7 @@ export class ArminComponent implements Component {
 			allSettled = false;
 
 			// Find the target row for this column (lowest non-space pixel)
+			// 当前列从尚未沉积区域寻找最低目标像素，落点到达后一次锁定该段高度。
 			let targetRow = -1;
 			for (let row = DISPLAY_HEIGHT - 1 - drop.settled; row >= 0; row--) {
 				if (this.finalGrid[row][x] !== " ") {
@@ -314,6 +332,7 @@ export class ArminComponent implements Component {
 		this.currentGrid = this.createEmptyGrid();
 
 		// Draw from middle expanding outward
+		// 每帧从中心向上下各扩一行，模拟 CRT 图像由中线展开。
 		const top = midRow - state.expansion;
 		const bottom = midRow + state.expansion;
 
@@ -332,6 +351,7 @@ export class ArminComponent implements Component {
 
 		if (state.phase < state.glitchFrames) {
 			// Glitch phase: show corrupted version
+			// 扰动帧从 finalGrid 派生，随机水平偏移或替换整行，不累积前一帧损坏。
 			this.currentGrid = this.finalGrid.map((row) => {
 				const offset = Math.floor(Math.random() * 7) - 3;
 				const glitchRow = [...row];
@@ -355,6 +375,7 @@ export class ArminComponent implements Component {
 		}
 
 		// Final frame: show clean image
+		// 结束时复制目标网格，避免 currentGrid 与 finalGrid 共享行数组后被后续修改。
 		this.currentGrid = this.finalGrid.map((row) => [...row]);
 		return true;
 	}
@@ -373,10 +394,12 @@ export class ArminComponent implements Component {
 	}
 
 	private updateDisplay(): void {
+		// 单调版本号使 render 缓存失效，而无需比较整个二维网格。
 		this.gridVersion++;
 	}
 
 	dispose(): void {
+		// TUI 移除组件时必须清理 interval，防止后台继续 requestRender 并保持进程存活。
 		this.stopAnimation();
 	}
 }

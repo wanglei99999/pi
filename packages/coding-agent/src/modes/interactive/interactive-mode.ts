@@ -1,6 +1,8 @@
 /**
  * Interactive mode for the coding agent.
+ * 编码代理的交互模式。
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
+ * 负责 TUI 渲染和用户交互，业务状态与执行逻辑委托给 AgentSession。
  */
 
 import * as crypto from "node:crypto";
@@ -161,6 +163,7 @@ import {
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
 
 /** Interface for components that can be expanded/collapsed */
+/** 可统一展开或折叠的组件接口 */
 interface Expandable {
 	setExpanded(expanded: boolean): void;
 }
@@ -321,6 +324,7 @@ function formatLoginProviderCompletionDescription(provider: LoginProviderComplet
 
 /**
  * Options for InteractiveMode initialization.
+ * InteractiveMode 的初始化选项。
  */
 export interface InteractiveModeOptions {
 	/** Providers that were migrated to auth.json (shows warning) */
@@ -377,14 +381,17 @@ export class InteractiveMode {
 	private anthropicSubscriptionWarningShown = false;
 
 	// Status line tracking (for mutating immediately-sequential status updates)
+	// 跟踪状态行，使连续状态更新可原地替换，避免聊天区重复刷屏
 	private lastStatusSpacer: Spacer | undefined = undefined;
 	private lastStatusText: Text | undefined = undefined;
 
 	// Streaming message tracking
+	// 跟踪当前流式助手消息及其 UI 组件
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
 	private streamingMessage: AssistantMessage | undefined = undefined;
 
 	// Tool execution tracking: toolCallId -> component
+	// 按 toolCallId 关联工具执行事件与对应 UI 组件
 	private pendingTools = new Map<string, ToolExecutionComponent>();
 
 	// Tool output expansion state
@@ -411,15 +418,19 @@ export class InteractiveMode {
 	private pendingBashComponents: BashExecutionComponent[] = [];
 
 	// Auto-compaction state
+	// 自动压缩期间临时接管 Escape 键所需的状态
 	private autoCompactionEscapeHandler?: () => void;
 
 	// Auto-retry state
+	// 自动重试等待期间临时接管 Escape 键所需的状态
 	private retryEscapeHandler?: () => void;
 
 	// Messages queued while compaction is running
+	// 压缩进行时暂存的消息，压缩结束后再按原模式投递
 	private compactionQueuedMessages: CompactionQueuedMessage[] = [];
 
 	// Shutdown state
+	// 扩展可请求关闭；真正退出会等待代理进入 settled 状态
 	private shutdownRequested = false;
 
 	// Extension UI state
@@ -500,10 +511,12 @@ export class InteractiveMode {
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 
 		// Load hide thinking block setting
+		// 读取思考块可见性和输出边距，使初始渲染与持久化设置一致
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.outputPad = this.settingsManager.getOutputPad();
 
 		// Register themes from resource loader and initialize
+		// 先注册资源加载器提供的主题，再创建负责实时同步的主题控制器
 		setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
 		this.themeController = new InteractiveThemeController(
 			this.ui,
@@ -701,6 +714,7 @@ export class InteractiveMode {
 		this.registerSignalHandlers();
 
 		// Load changelog (only show new entries, skip for resumed sessions)
+		// 仅新会话加载未读 changelog；恢复的会话避免在历史消息前插入启动内容
 		this.changelogMarkdown = this.getChangelogForDisplay();
 
 		// Ensure fd and rg are available (downloads if missing, adds to PATH via getBinDir)
@@ -724,7 +738,9 @@ export class InteractiveMode {
 		}
 
 		// Add header container as first child. Populate it after applying theme settings.
+		// 先固定整体容器顺序，再应用主题和填充 header，避免初始化阶段重排 UI。
 		// Keep loaded resources before chat so restored session messages never precede them.
+		// 已加载资源始终位于聊天记录之前，恢复会话时也保持一致。
 		this.ui.addChild(this.headerContainer);
 		this.ui.addChild(this.loadedResourcesContainer);
 
@@ -742,6 +758,7 @@ export class InteractiveMode {
 		this.setupEditorSubmitHandler();
 
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
+		// 扩展绑定前先启动 TUI，使 session_start 处理器可以立即打开交互对话框
 		this.ui.start();
 		this.isInitialized = true;
 
@@ -810,9 +827,11 @@ export class InteractiveMode {
 		this.ui.requestRender();
 
 		// Initialize extensions first so resources are shown before messages
+		// 先绑定扩展并展示资源，再渲染历史消息，保证启动信息顺序稳定
 		await this.rebindCurrentSession();
 
 		// Render initial messages AFTER showing loaded resources
+		// 资源区就绪后才渲染压缩感知的会话历史
 		this.renderInitialMessages();
 
 		// Set up theme file watcher
@@ -833,6 +852,7 @@ export class InteractiveMode {
 
 	/**
 	 * Update terminal title with session name and cwd.
+	 * 根据会话名称和 cwd 更新终端标题。
 	 */
 	private updateTerminalTitle(): void {
 		const cwdBasename = path.basename(this.sessionManager.getCwd());
@@ -846,7 +866,9 @@ export class InteractiveMode {
 
 	/**
 	 * Run the interactive mode. This is the main entry point.
+	 * 运行交互模式，是主要入口。
 	 * Initializes the UI, shows warnings, processes initial messages, and starts the interactive loop.
+	 * 依次初始化 UI、显示警告、处理启动消息，并进入持续读取用户输入的主循环。
 	 */
 	async run(): Promise<void> {
 		await this.init();
@@ -912,6 +934,7 @@ export class InteractiveMode {
 		}
 
 		// Main interactive loop
+		// 主循环只负责取得输入并交给 AgentSession；命令派发已在编辑器提交处理器中完成
 		while (true) {
 			const userInput = await this.getUserInput();
 			try {
@@ -1621,6 +1644,7 @@ export class InteractiveMode {
 
 	/**
 	 * Initialize the extension system with TUI-based UI context.
+	 * 使用基于 TUI 的 UI 上下文初始化扩展系统。
 	 */
 	private async bindCurrentSessionExtensions(): Promise<void> {
 		const uiContext = this.createExtensionUIContext();
@@ -1723,6 +1747,7 @@ export class InteractiveMode {
 	}
 
 	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
+		// 会话被替换时先解除旧订阅；渲染与扩展绑定顺序由调用场景决定，避免事件落到旧 UI 状态。
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.applyRuntimeSettings();
@@ -1748,6 +1773,7 @@ export class InteractiveMode {
 	}
 
 	private renderCurrentSessionState(): void {
+		// 会话替换后清除所有仅属于旧运行实例的瞬态 UI 状态，再从持久化条目重建。
 		this.loadedResourcesContainer.clear();
 		this.chatContainer.clear();
 		this.pendingMessagesContainer.clear();
@@ -1948,6 +1974,7 @@ export class InteractiveMode {
 	}
 
 	private resetExtensionUI(): void {
+		// 扩展重载或会话替换前撤销其全部 UI 所有权，防止旧 context 继续控制终端组件。
 		if (this.extensionSelector) {
 			this.hideExtensionSelector();
 		}
@@ -2538,6 +2565,7 @@ export class InteractiveMode {
 
 	// =========================================================================
 	// Key Handlers
+	// 输入按键处理
 	// =========================================================================
 
 	private setupKeyHandlers(): void {
@@ -2634,6 +2662,7 @@ export class InteractiveMode {
 			if (!text) return;
 
 			// Handle commands
+			// 内置斜杠命令在 UI 层优先分派；未匹配输入才会进入 AgentSession 的模板或扩展命令流程
 			if (text === "/settings") {
 				this.showSettingsSelector();
 				this.editor.setText("");
@@ -2764,6 +2793,7 @@ export class InteractiveMode {
 			}
 
 			// Handle bash command (! for normal, !! for excluded from context)
+			// Bash 前缀由交互层截获；是否进入 LLM 上下文由单/双感叹号决定
 			if (text.startsWith("!")) {
 				const isExcluded = text.startsWith("!!");
 				const command = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
@@ -2782,6 +2812,7 @@ export class InteractiveMode {
 			}
 
 			// Queue input during compaction (extension commands execute immediately)
+			// 压缩期间普通输入先留在 UI 队列，扩展命令仍立即执行，避免阻塞交互控制操作
 			if (this.session.isCompacting) {
 				if (this.isExtensionCommand(text)) {
 					this.editor.addToHistory?.(text);
@@ -2794,7 +2825,9 @@ export class InteractiveMode {
 			}
 
 			// If streaming, use prompt() with steer behavior
+			// 流式响应期间普通提交按 steer 投递，可在当前工具轮次结束后影响下一次模型调用
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
+			// prompt() 同时负责扩展命令即时执行、提示词模板展开和消息入队
 			if (this.session.isStreaming) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
@@ -2805,6 +2838,7 @@ export class InteractiveMode {
 			}
 
 			// Normal message submission
+			// 空闲状态下将输入交回主循环，最终由 run() 调用 AgentSession.prompt()
 			// First, move any pending bash components to chat
 			this.flushPendingBashComponents();
 
@@ -2818,6 +2852,7 @@ export class InteractiveMode {
 	}
 
 	private subscribeToAgent(): void {
+		// UI 只订阅当前 AgentSession；会话替换时 rebindCurrentSession() 会先解除旧订阅。
 		this.unsubscribe = this.session.subscribe(async (event) => {
 			await this.handleEvent(event);
 		});
@@ -2830,6 +2865,7 @@ export class InteractiveMode {
 
 		this.footer.invalidate();
 
+		// 所有运行时事件在此收敛为 UI 状态变化，AgentSession 仍是持久化与业务状态的唯一来源。
 		switch (event.type) {
 			case "agent_start":
 				this.pendingTools.clear();
@@ -2837,6 +2873,7 @@ export class InteractiveMode {
 					this.ui.terminal.setProgress(true);
 				}
 				// Restore main escape handler if retry handler is still active
+				// 新一轮代理运行开始时恢复主 Escape 处理器；重试成功事件可能稍后才到达
 				// (retry success event fires later, but we need main handler now)
 				if (this.retryEscapeHandler) {
 					this.defaultEditor.onEscape = this.retryEscapeHandler;
@@ -2888,6 +2925,7 @@ export class InteractiveMode {
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
 				} else if (event.message.role === "assistant") {
+					// 助手消息在 start 时创建单一流式组件，后续 delta 只更新该组件。
 					this.streamingComponent = new AssistantMessageComponent(
 						undefined,
 						this.hideThinkingBlock,
@@ -2907,6 +2945,7 @@ export class InteractiveMode {
 					this.streamingMessage = event.message;
 					this.streamingComponent.updateContent(this.streamingMessage);
 
+					// toolCall 可能随流逐步补全；按 id 复用组件并更新参数，避免重复渲染。
 					for (const content of this.streamingMessage.content) {
 						if (content.type === "toolCall") {
 							if (!this.pendingTools.has(content.id)) {
@@ -2965,6 +3004,7 @@ export class InteractiveMode {
 						this.pendingTools.clear();
 					} else {
 						// Args are now complete - trigger diff computation for edit tools
+						// 助手消息正常结束后参数才视为完整，此时编辑工具可以安全计算 diff
 						for (const [, component] of this.pendingTools.entries()) {
 							component.setArgsComplete();
 						}
@@ -2978,6 +3018,7 @@ export class InteractiveMode {
 				break;
 
 			case "tool_execution_start": {
+				// 某些提供商不会提前流出完整 toolCall；执行开始事件可补建缺失的工具组件。
 				let component = this.pendingTools.get(event.toolCallId);
 				if (!component) {
 					component = new ToolExecutionComponent(
@@ -3021,6 +3062,7 @@ export class InteractiveMode {
 			}
 
 			case "agent_end":
+				// agent_end 结束本次流式视觉状态，但真正可安全关闭要等待 agent_settled。
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}
@@ -3036,6 +3078,7 @@ export class InteractiveMode {
 				break;
 
 			case "agent_settled":
+				// settled 表示重试、压缩和排队续接均已处理完，可执行扩展请求的延迟关闭。
 				await this.checkShutdownRequested();
 				break;
 
@@ -3044,6 +3087,7 @@ export class InteractiveMode {
 					this.ui.terminal.setProgress(true);
 				}
 				// Keep editor active; submissions are queued during compaction.
+				// 压缩期间编辑器保持可用，普通输入暂存；Escape 临时改为取消压缩
 				this.autoCompactionEscapeHandler = this.defaultEditor.onEscape;
 				this.defaultEditor.onEscape = () => {
 					this.session.abortCompaction();
@@ -3094,6 +3138,7 @@ export class InteractiveMode {
 
 			case "auto_retry_start": {
 				// Set up escape to abort retry
+				// 指数退避等待期间，Escape 临时用于取消重试
 				this.retryEscapeHandler = this.defaultEditor.onEscape;
 				this.defaultEditor.onEscape = () => {
 					this.session.abortRetry();
@@ -3107,6 +3152,7 @@ export class InteractiveMode {
 
 			case "auto_retry_end": {
 				// Restore escape handler
+				// 重试结束后恢复进入重试前的 Escape 行为
 				if (this.retryEscapeHandler) {
 					this.defaultEditor.onEscape = this.retryEscapeHandler;
 					this.retryEscapeHandler = undefined;
@@ -3286,7 +3332,9 @@ export class InteractiveMode {
 		this.pendingTools.clear();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
 		// Cache-miss notices are not persisted; re-derive them from the full entry
+		// 缓存未命中提示不持久化；重建聊天记录时根据完整条目重新推导，
 		// list and re-inject them after the assistant messages that paid for them.
+		// 并插回实际产生额外计费的助手消息之后。
 		const cacheMisses = this.settingsManager.getShowCacheMissNotices()
 			? collectCacheMisses(this.sessionManager.getEntries(), this.session.modelRegistry)
 			: new Map<AssistantMessage, CacheMiss>();
@@ -3366,6 +3414,7 @@ export class InteractiveMode {
 
 	/**
 	 * Render session entries to chat. Used for initial load and rebuild after compaction.
+	 * 将会话条目渲染到聊天区，用于初始加载和压缩后的重建。
 	 * @param entries Compaction-aware session entries to render
 	 * @param options.updateFooter Update footer state
 	 * @param options.populateHistory Add user messages to editor history
@@ -3489,8 +3538,11 @@ export class InteractiveMode {
 
 	/**
 	 * Gracefully shutdown the agent.
+	 * 优雅关闭交互代理。
 	 * Stops the TUI before emitting shutdown events so extension UI cleanup cannot
+	 * 交互退出时先停止 TUI，再发出关闭事件，防止扩展 UI 清理
 	 * repaint the final frame while the process is exiting.
+	 * 在进程退出期间重绘最终帧。
 	 */
 	private isShuttingDown = false;
 
@@ -3498,11 +3550,13 @@ export class InteractiveMode {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
 		// Keep signal handlers registered until terminal cleanup has completed.
+		// 终端清理完成前保留信号处理器，避免 signal-exit 在同一次信号分派中重新发送信号。
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
 
 		if (options?.fromSignal) {
 			// Signal-triggered shutdown (SIGTERM/SIGHUP). Emit extension cleanup
+			// 信号触发关闭时先执行扩展清理，再接触终端；
 			// (session_shutdown) BEFORE touching the terminal. Extension teardown
 			// such as removing sockets does not write to the tty, so it must not be
 			// skipped if a later terminal-restore write fails on a dead or stalled
@@ -3517,6 +3571,7 @@ export class InteractiveMode {
 		}
 
 		// Interactive quit (Ctrl+D, Ctrl+C, /quit, extension shutdown()). Stop the
+		// 主动交互退出时先停止 TUI，防止扩展清理重绘；
 		// TUI before emitting shutdown events so extension UI cleanup cannot repaint
 		// the final frame while the process is exiting.
 		// Drain any in-flight Kitty key release events before stopping.
@@ -3540,18 +3595,21 @@ export class InteractiveMode {
 		this.unregisterSignalHandlers();
 		killTrackedDetachedChildren();
 		// The terminal is gone. Do not run normal shutdown because TUI and
+		// 终端已失效时跳过常规关闭；TUI 或扩展清理写入恢复序列会再次触发 EIO。
 		// extension cleanup can write restore sequences and re-trigger EIO.
 		process.exit(129);
 	}
 
 	/**
 	 * Last-resort handler for uncaught exceptions. The TUI puts stdin into raw
+	 * 未捕获异常的最后保护。TUI 会将 stdin 设为 raw mode 并隐藏光标；
 	 * mode and hides the cursor; without this handler, an uncaught throw from
 	 * anywhere (e.g. an extension's async `ChildProcess.on("exit")` callback)
 	 * tears down the process while leaving the terminal in raw mode with no
 	 * cursor, requiring `stty sane && reset` to recover.
 	 *
 	 * Unlike emergencyTerminalExit, the terminal is still alive here, so we
+	 * 与 emergencyTerminalExit 不同，此时终端仍可写，因此调用 ui.stop()
 	 * call ui.stop() to restore cooked mode, the cursor, and disable bracketed
 	 * paste / Kitty / modifyOtherKeys sequences.
 	 */
@@ -3615,6 +3673,7 @@ export class InteractiveMode {
 		this.signalCleanupHandlers.push(() => process.stderr.off("error", terminalErrorHandler));
 
 		// Restore the terminal before the process dies on any uncaught throw.
+		// 未捕获异常导致进程退出前尽力恢复终端，避免留下 raw mode 和隐藏光标
 		// Without this, an unhandled exception from extension code (or anywhere
 		// in pi) leaves the terminal in raw mode with no cursor.
 		const uncaughtExceptionHandler = (error: Error) => this.uncaughtCrash(error);
@@ -3910,7 +3969,9 @@ export class InteractiveMode {
 
 	/**
 	 * Get all queued messages (read-only).
+	 * 只读获取全部排队消息。
 	 * Combines session queue and compaction queue.
+	 * 合并 AgentSession 队列与 UI 的压缩期间暂存队列。
 	 */
 	private getAllQueuedMessages(): { steering: string[]; followUp: string[] } {
 		return {
@@ -3927,7 +3988,9 @@ export class InteractiveMode {
 
 	/**
 	 * Clear all queued messages and return their contents.
+	 * 清空所有队列并返回其中内容。
 	 * Clears both session queue and compaction queue.
+	 * 同时清空 AgentSession 队列和压缩期间暂存队列。
 	 */
 	private clearAllQueues(): { steering: string[]; followUp: string[] } {
 		const { steering, followUp } = this.session.clearQueue();
@@ -3964,6 +4027,7 @@ export class InteractiveMode {
 	}
 
 	private restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
+		// steering 与 follow-up 按展示顺序合并回编辑器，确保用户中止后不会丢失尚未投递的输入。
 		const { steering, followUp } = this.clearAllQueues();
 		const allQueued = [...steering, ...followUp];
 		if (allQueued.length === 0) {
@@ -4011,6 +4075,7 @@ export class InteractiveMode {
 		this.compactionQueuedMessages = [];
 		this.updatePendingMessagesDisplay();
 
+		// 任一投递失败都恢复整批 UI 队列，避免部分失败后消息无声丢失。
 		const restoreQueue = (error: unknown) => {
 			this.session.clearQueue();
 			this.compactionQueuedMessages = queuedMessages;
@@ -4025,6 +4090,7 @@ export class InteractiveMode {
 		try {
 			if (options?.willRetry) {
 				// When retry is pending, queue messages for the retry turn
+				// 溢出压缩后即将自动重试时，将消息加入该重试轮次，而不是启动新的 prompt
 				for (const message of queuedMessages) {
 					if (this.isExtensionCommand(message.text)) {
 						await this.session.prompt(message.text);
@@ -4058,6 +4124,7 @@ export class InteractiveMode {
 			}
 
 			// Send first prompt (starts streaming)
+			// 第一条普通消息启动新一轮流式请求，其余消息随后按原 steer/followUp 模式排队
 			const promptPromise = this.session.prompt(firstPrompt.text).catch((error) => {
 				restoreQueue(error);
 			});
@@ -5284,6 +5351,7 @@ export class InteractiveMode {
 	// =========================================================================
 
 	private async handleReloadCommand(): Promise<void> {
+		// 重载会替换扩展运行时和资源视图，因此只允许在无流式响应、无压缩任务时执行。
 		if (this.session.isStreaming) {
 			this.showWarning("Wait for the current response to finish before reloading.");
 			return;
@@ -5325,6 +5393,7 @@ export class InteractiveMode {
 
 		let chatRestoredBeforeSessionStart = false;
 		let reloadBoxDismissed = false;
+		// session_start 扩展可能立即读取或修改 UI；在事件发出前先按新设置重建聊天区。
 		const restoreChatBeforeSessionStart = () => {
 			if (chatRestoredBeforeSessionStart) {
 				return;
@@ -6001,10 +6070,12 @@ export class InteractiveMode {
 			await this.session.compact(customInstructions);
 		} catch {
 			// Ignore, will be emitted as an event
+			// 错误由 compaction_end 事件统一渲染，命令处理器不重复显示
 		}
 	}
 
 	stop(): void {
+		// stop() 只负责同步撤销终端/UI 资源；会话与扩展的异步释放由 runtimeHost.dispose() 处理。
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);
 		}

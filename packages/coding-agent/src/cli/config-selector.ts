@@ -1,6 +1,9 @@
 /**
  * TUI config selector for `pi config` command
  */
+/**
+ * `pi config` 命令使用的 TUI 配置选择器。
+ */
 
 import { ProcessTerminal, TUI } from "@earendil-works/pi-tui";
 import type { SettingsManager } from "../core/settings-manager.ts";
@@ -17,8 +20,10 @@ export interface ConfigSelectorOptions {
 }
 
 /** Show TUI config selector and return when closed */
+/** 显示 TUI 配置选择器，并在界面关闭后返回。 */
 export async function selectConfig(options: ConfigSelectorOptions): Promise<void> {
 	// Initialize theme before showing TUI
+	// 在启动 TUI 前初始化主题，确保首次渲染即使用正确样式。
 	initTheme(options.settingsManager.getTheme(), true);
 
 	return new Promise((resolve) => {

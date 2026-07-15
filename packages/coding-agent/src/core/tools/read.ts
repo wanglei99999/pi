@@ -39,13 +39,23 @@ const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.m
 /**
  * Pluggable operations for the read tool.
  * Override these to delegate file reading to remote systems (for example SSH).
+ * 可替换的读取操作将路径解析后的文件访问委托给远端或虚拟文件系统，同时保持工具协议与渲染不变。
  */
 export interface ReadOperations {
-	/** Read file contents as a Buffer */
+	/**
+	 * Read file contents as a Buffer
+	 * 以 Buffer 返回内容，便于统一处理文本编码和图片二进制。
+	 */
 	readFile: (absolutePath: string) => Promise<Buffer>;
-	/** Check if file is readable (throw if not) */
+	/**
+	 * Check if file is readable (throw if not)
+	 * 不可读时抛错，执行层统一转换为工具失败。
+	 */
 	access: (absolutePath: string) => Promise<void>;
-	/** Detect image MIME type, return null or undefined for non-images */
+	/**
+	 * Detect image MIME type, return null or undefined for non-images
+	 * 图片检测可选；非图片或未知类型返回空值后按文本读取。
+	 */
 	detectImageMimeType?: (absolutePath: string) => Promise<string | null | undefined>;
 }
 
@@ -238,6 +248,7 @@ export function createReadToolDefinition(
 							const absolutePath = await resolveReadPathAsync(path, cwd);
 							if (aborted) return;
 							// Check if file exists and is readable.
+							// 路径解析完成后先验证可读性，再执行 MIME 探测和实际读取。
 							await ops.access(absolutePath);
 							if (aborted) return;
 							const mimeType = ops.detectImageMimeType ? await ops.detectImageMimeType(absolutePath) : undefined;
@@ -246,6 +257,7 @@ export function createReadToolDefinition(
 							const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
 							if (mimeType) {
 								// Read image as binary.
+								// 图片保持二进制读取，processImage 负责格式验证、转换和可选缩放。
 								const buffer = await ops.readFile(absolutePath);
 								const processed = await processImage(buffer, mimeType, { autoResizeImages });
 								if (!processed.ok) {
@@ -263,20 +275,24 @@ export function createReadToolDefinition(
 								}
 							} else {
 								// Read text content.
+								// 文本统一按 UTF-8 解码，并以 1-based offset/limit 对外暴露行范围。
 								const buffer = await ops.readFile(absolutePath);
 								const textContent = buffer.toString("utf-8");
 								const allLines = textContent.split("\n");
 								const totalFileLines = allLines.length;
 								// Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
+								// 外部 offset 从 1 开始，内部数组索引从 0 开始。
 								const startLine = offset ? Math.max(0, offset - 1) : 0;
 								const startLineDisplay = startLine + 1;
 								// Check if offset is out of bounds.
+								// 超出文件末尾时显式报错，避免返回空内容被误认为有效读取。
 								if (startLine >= allLines.length) {
 									throw new Error(`Offset ${offset} is beyond end of file (${allLines.length} lines total)`);
 								}
 								let selectedContent: string;
 								let userLimitedLines: number | undefined;
 								// If limit is specified by the user, honor it first. Otherwise truncateHead decides.
+								// 用户 limit 先缩小候选区间，随后仍应用全局行数和字节安全上限。
 								if (limit !== undefined) {
 									const endLine = Math.min(startLine + limit, allLines.length);
 									selectedContent = allLines.slice(startLine, endLine).join("\n");
@@ -285,15 +301,18 @@ export function createReadToolDefinition(
 									selectedContent = allLines.slice(startLine).join("\n");
 								}
 								// Apply truncation, respecting both line and byte limits.
+								// truncateHead 同时保证行预算和 UTF-8 字节预算。
 								const truncation = truncateHead(selectedContent);
 								let outputText: string;
 								if (truncation.firstLineExceedsLimit) {
 									// First line alone exceeds the byte limit. Point the model at a bash fallback.
+									// 单行已超出工具字节上限时不返回部分行，改为提供精确的 bash 分段读取建议。
 									const firstLineSize = formatSize(Buffer.byteLength(allLines[startLine], "utf-8"));
 									outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${path} | head -c ${DEFAULT_MAX_BYTES}]`;
 									details = { truncation };
 								} else if (truncation.truncated) {
 									// Truncation occurred. Build an actionable continuation notice.
+									// 截断提示包含实际行范围和下一 offset，使模型可以连续读取完整文件。
 									const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
 									const nextOffset = endLineDisplay + 1;
 									outputText = truncation.content;
@@ -305,11 +324,13 @@ export function createReadToolDefinition(
 									details = { truncation };
 								} else if (userLimitedLines !== undefined && startLine + userLimitedLines < allLines.length) {
 									// User-specified limit stopped early, but the file still has more content.
+									// 即使未触发工具上限，用户 limit 提前停止时也提示剩余行和继续位置。
 									const remaining = allLines.length - (startLine + userLimitedLines);
 									const nextOffset = startLine + userLimitedLines + 1;
 									outputText = `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
 								} else {
 									// No truncation and no remaining user-limited content.
+									// 文件选定范围已完整返回，无需附加继续提示。
 									outputText = truncation.content;
 								}
 								content = [{ type: "text", text: outputText }];

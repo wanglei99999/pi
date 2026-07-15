@@ -12,6 +12,8 @@ export interface SourceInfo {
 }
 
 export function createSourceInfo(path: string, metadata: PathMetadata): SourceInfo {
+	// Preserve package-manager provenance verbatim so diagnostics and UI agree on resource ownership.
+	// 原样保留包管理器来源信息，使诊断与 UI 对资源归属保持一致。
 	return {
 		path,
 		source: metadata.source,
@@ -30,6 +32,8 @@ export function createSyntheticSourceInfo(
 		baseDir?: string;
 	},
 ): SourceInfo {
+	// Synthetic resources default to temporary top-level ownership because no package metadata exists.
+	// 合成资源没有包元数据，因此默认归属临时顶层来源。
 	return {
 		path,
 		source: options.source,

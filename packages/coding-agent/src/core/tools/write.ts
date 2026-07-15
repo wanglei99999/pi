@@ -20,12 +20,16 @@ export type WriteToolInput = Static<typeof writeSchema>;
 
 /**
  * Pluggable operations for the write tool.
+ * write 工具可替换的底层操作接口。
  * Override these to delegate file writing to remote systems (for example SSH).
+ * 可通过覆盖这些操作把文件写入委托给远程系统，例如 SSH 后端。
  */
 export interface WriteOperations {
 	/** Write content to a file */
+	/** 用完整 content 创建或覆盖目标文件。 */
 	writeFile: (absolutePath: string, content: string) => Promise<void>;
 	/** Create directory recursively */
+	/** 递归创建目标文件的父目录。 */
 	mkdir: (dir: string) => Promise<void>;
 }
 
@@ -36,6 +40,7 @@ const defaultWriteOperations: WriteOperations = {
 
 export interface WriteToolOptions {
 	/** Custom operations for file writing. Default: local filesystem */
+	/** 自定义写入操作；默认使用本地文件系统。 */
 	operations?: WriteOperations;
 }
 
@@ -198,24 +203,31 @@ export function createWriteToolDefinition(
 			_onUpdate?,
 			_ctx?,
 		) {
+			// 规范化 Unicode 空格、@ 前缀和 ~，并相对 cwd 解析；绝对路径仍被允许，此处不实施工作区边界限制。
 			const absolutePath = resolveToCwd(path, cwd);
 			const dir = dirname(absolutePath);
+			// 同一最终路径的修改按调用顺序串行执行，其他文件仍可并发，避免 mkdir/write 与 edit 等工具互相覆盖。
 			return withFileMutationQueue(absolutePath, async () => {
 				// Do not reject from an abort event listener here: that would release the
 				// mutation queue while an in-flight filesystem operation may still finish.
 				// Checking signal.aborted after each await observes the same aborts while
 				// keeping the queue locked until the current operation has settled.
+				// 不要在 abort 事件监听器中直接 reject，否则文件系统操作仍可能继续，却会提前释放修改队列。
+				// 每次 await 后检查 signal.aborted，既能观察取消，又会持锁到当前操作真正结束。
 				const throwIfAborted = (): void => {
 					if (signal?.aborted) throw new Error("Operation aborted");
 				};
 
 				throwIfAborted();
 				// Create parent directories if needed.
+				// 写入前确保父目录存在；递归 mkdir 对已存在目录同样安全。
 				await ops.mkdir(dir);
 				throwIfAborted();
 
 				// Write the file contents.
+				// writeFile 使用完整内容覆盖目标，不提供追加或局部更新语义。
 				await ops.writeFile(absolutePath, content);
+				// 写入完成后再次检查取消；此时可能报告 aborted，但已完成的文件写入不会回滚。
 				throwIfAborted();
 
 				return {

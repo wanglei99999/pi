@@ -31,6 +31,8 @@ function getScopeFromSpanTag(tag: string): string | undefined {
 }
 
 function getScopeFormatter(scope: string, theme: HighlightTheme): HighlightFormatter | undefined {
+	// Prefer an exact token scope, then fall back to its dotted or dashed parent category.
+	// 优先匹配完整 token scope，再退回以点号或连字符分隔的父级类别。
 	const exact = theme[scope];
 	if (exact) {
 		return exact;
@@ -78,6 +80,8 @@ function isSpanOpenTagStart(html: string, index: number): boolean {
 }
 
 export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string {
+	// Translate highlight.js span nesting into formatter calls instead of emitting HTML into the terminal.
+	// 将 highlight.js 的 span 嵌套转换为格式化函数调用，避免向终端直接输出 HTML。
 	let output = "";
 	let textBuffer = "";
 	const scopes: Array<string | undefined> = [];
@@ -93,6 +97,8 @@ export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}):
 
 	let index = 0;
 	while (index < html.length) {
+		// Malformed or unknown markup is left in the text stream, providing a lossless rendering fallback.
+		// 无法识别或不完整的标记会保留在文本流中，作为不丢失内容的降级路径。
 		if (isSpanOpenTagStart(html, index)) {
 			const tagEndIndex = html.indexOf(">", index + 5);
 			if (tagEndIndex !== -1) {
@@ -132,6 +138,8 @@ export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}):
 }
 
 export function highlight(code: string, options: HighlightOptions = {}): string {
+	// Use an explicit language when supplied; otherwise let highlight.js infer from the requested subset.
+	// 提供 language 时使用显式语言，否则由 highlight.js 在指定子集中自动推断。
 	const html = options.language
 		? hljs.highlight(code, {
 				language: options.language,
@@ -142,5 +150,7 @@ export function highlight(code: string, options: HighlightOptions = {}): string 
 }
 
 export function supportsLanguage(name: string): boolean {
+	// Language registration and caching belong to highlight.js; this adapter keeps no separate cache.
+	// 语言注册与缓存由 highlight.js 管理，此适配层不维护额外缓存。
 	return hljs.getLanguage(name) !== undefined;
 }

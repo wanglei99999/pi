@@ -2,6 +2,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 
 /** Wrap a ToolDefinition into an AgentTool for the core runtime. */
+/** 将 ToolDefinition 包装为核心运行时使用的 AgentTool。 */
 export function wrapToolDefinition<TDetails = unknown>(
 	definition: ToolDefinition<any, TDetails>,
 	ctxFactory?: () => ExtensionContext,
@@ -19,6 +20,7 @@ export function wrapToolDefinition<TDetails = unknown>(
 }
 
 /** Wrap multiple ToolDefinitions into AgentTools for the core runtime. */
+/** 批量将 ToolDefinition 包装为核心运行时使用的 AgentTool。 */
 export function wrapToolDefinitions(
 	definitions: ToolDefinition<any, any>[],
 	ctxFactory?: () => ExtensionContext,
@@ -31,6 +33,11 @@ export function wrapToolDefinitions(
  *
  * This keeps AgentSession's internal registry definition-first even when a caller
  * provides plain AgentTool overrides that do not include prompt metadata or renderers.
+ */
+/**
+ * 根据 AgentTool 合成最小化的 ToolDefinition。
+ * 即使调用方覆盖的是不含提示元数据或渲染器的普通 AgentTool，
+ * 也能让 AgentSession 的内部注册表始终以 ToolDefinition 为统一边界。
  */
 export function createToolDefinitionFromAgentTool(tool: AgentTool<any>): ToolDefinition<any, unknown> {
 	return {

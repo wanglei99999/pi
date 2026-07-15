@@ -25,6 +25,7 @@ import { DynamicBorder } from "./dynamic-border.ts";
 import { keyDisplayText } from "./keybinding-hints.ts";
 
 const SETTINGS_SUBMENU_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
+	// 给值列保留弹性空间：窄终端不让标签占满整行，宽终端也限制主列避免选项距离过远。
 	minPrimaryColumnWidth: 12,
 	maxPrimaryColumnWidth: 32,
 };
@@ -49,6 +50,7 @@ const DEFAULT_PROJECT_TRUST_BY_LABEL = new Map(
 );
 
 export interface SettingsConfig {
+	// 该对象是打开选择器时的设置快照；组件内的变更通过 callbacks 交还宿主保存，而非直接写配置文件。
 	autoCompact: boolean;
 	showImages: boolean;
 	imageWidthCells: number;
@@ -82,6 +84,7 @@ export interface SettingsConfig {
 }
 
 export interface SettingsCallbacks {
+	// 每个回调对应一个已解析的领域值，作用域选择、全局/项目覆盖和持久化策略由宿主实现。
 	onAutoCompactChange: (enabled: boolean) => void;
 	onShowImagesChange: (enabled: boolean) => void;
 	onImageWidthCellsChange: (width: number) => void;
@@ -115,6 +118,7 @@ export interface SettingsCallbacks {
 
 /**
  * A submenu component for selecting from a list of options.
+ * submenu 维护自身临时状态并在值变化时回调，取消只返回上一级，不负责回滚已提交的非预览设置。
  */
 class WarningSettingsSubmenu extends Container {
 	private settingsList: SettingsList;
@@ -124,6 +128,7 @@ class WarningSettingsSubmenu extends Container {
 		super();
 
 		this.state = { ...warnings };
+		// 使用副本逐项更新，避免在用户操作过程中直接修改调用方持有的配置对象。
 
 		const items: SettingItem[] = [
 			{
@@ -193,6 +198,7 @@ class SelectSubmenu extends Container {
 		);
 
 		// Pre-select current value
+		// 当前值不在可用项中时保持列表默认选择，兼容配置项被移除或重命名的情况。
 		const currentIndex = options.findIndex((o) => o.value === currentValue);
 		if (currentIndex !== -1) {
 			this.selectList.setSelectedIndex(currentIndex);
@@ -205,6 +211,7 @@ class SelectSubmenu extends Container {
 		this.selectList.onCancel = onCancel;
 
 		if (onSelectionChange) {
+			// selection change 用于无提交预览；只有 onSelect 才表示用户确认该值。
 			this.selectList.onSelectionChange = (item) => {
 				onSelectionChange(item.value);
 			};
@@ -240,6 +247,7 @@ function singleModeThemeItems(availableThemes: string[]): SelectItem[] {
 }
 
 function preferredTheme(availableThemes: string[], preferred: string | undefined, fallback: string): string {
+	// 优先保留仍可用的已选主题，再尝试约定 fallback，最后使用列表首项保证菜单有有效值。
 	if (preferred && availableThemes.includes(preferred)) return preferred;
 	if (availableThemes.includes(fallback)) return fallback;
 	return availableThemes[0] ?? fallback;
@@ -250,6 +258,7 @@ function defaultAutomaticThemes(
 	availableThemes: string[],
 ): { lightTheme: string; darkTheme: string } {
 	const autoTheme = parseAutoThemeSetting(currentThemeSetting);
+	// 已是自动模式时保留 light/dark 配对；固定模式切换到自动时两侧从同一当前主题起步。
 	if (autoTheme) return autoTheme;
 
 	const currentFixedTheme = currentThemeSetting.includes("/") ? undefined : currentThemeSetting;
@@ -306,6 +315,7 @@ class ThemeSubmenu extends Container {
 	}
 
 	private setContent(renderComponent: Component, inputComponent: Component = renderComponent): void {
+		// render 容器和实际接收按键的组件可不同，automatic 页面由外层内容渲染、内部 SettingsList 处理输入。
 		this.clear();
 		this.addChild(renderComponent);
 		this.inputComponent = inputComponent;
@@ -319,6 +329,7 @@ class ThemeSubmenu extends Container {
 			singleModeThemeItems(this.availableThemes),
 			this.singleTheme,
 			(value) => {
+				// 光标移动只预览主题；选择 Automatic 时切换子模式但尚未持久化。
 				if (value === AUTOMATIC_THEME_VALUE) {
 					this.mode = "automatic";
 					this.callbacks.onThemePreview?.(this.getThemeSetting());
@@ -436,6 +447,7 @@ class ThemeSubmenu extends Container {
 			currentValue,
 			onSelect,
 			() => {
+				// 取消子选择时恢复当前 automatic 组合的预览，而不是最初打开设置页时的主题。
 				this.callbacks.onThemePreview?.(this.getThemeSetting());
 				done();
 			},
@@ -456,10 +468,12 @@ class ThemeSubmenu extends Container {
 	}
 
 	private apply(themeSetting: string): void {
+		// onDone 把最终设置值交还 SettingsList/宿主，实际保存不在该组件内完成。
 		this.onDone(themeSetting);
 	}
 
 	private cancel(): void {
+		// 主题预览具有临时副作用，取消整个主题菜单必须显式恢复原始设置。
 		this.callbacks.onThemePreview?.(this.originalThemeSetting);
 		this.onDone();
 	}
@@ -467,6 +481,7 @@ class ThemeSubmenu extends Container {
 
 /**
  * Main settings selector component.
+ * 组件把配置快照转换为通用 SettingItem，值解析后通过细粒度回调交由宿主更新相应作用域。
  */
 export class SettingsSelectorComponent extends Container {
 	private settingsList: SettingsList;
@@ -475,6 +490,7 @@ export class SettingsSelectorComponent extends Container {
 		super();
 
 		const supportsImages = getCapabilities().images;
+		// 依赖终端渲染能力的选项按运行时能力裁剪，避免展示无法生效的开关。
 		const followUpKey = keyDisplayText("app.message.followUp");
 		let currentWarnings = { ...config.warnings };
 
@@ -620,6 +636,7 @@ export class SettingsSelectorComponent extends Container {
 		];
 
 		// Only show image toggle if terminal supports it
+		// 条件项通过固定锚点插入，保持后续相关图像设置在不同终端上的相对顺序稳定。
 		if (supportsImages) {
 			// Insert after autocompact
 			items.splice(1, 0, {
@@ -639,6 +656,7 @@ export class SettingsSelectorComponent extends Container {
 		}
 
 		// Image auto-resize toggle (always available, affects both attached and read images)
+		// 自动缩放影响发送给模型的图片，即使终端不支持内联显示仍然有意义。
 		items.splice(supportsImages ? 3 : 1, 0, {
 			id: "auto-resize-images",
 			label: "Auto-resize images",
@@ -648,6 +666,7 @@ export class SettingsSelectorComponent extends Container {
 		});
 
 		// Block images toggle (always available, insert after auto-resize-images)
+		// block-images 是 provider 输入策略，不等同于 show-images 的本地渲染开关。
 		const autoResizeIndex = items.findIndex((item) => item.id === "auto-resize-images");
 		items.splice(autoResizeIndex + 1, 0, {
 			id: "block-images",
@@ -728,6 +747,7 @@ export class SettingsSelectorComponent extends Container {
 		});
 
 		// Add borders
+		// SettingsList 自身负责搜索与滚动；外层只提供响应式列表高度和视觉边界。
 		this.addChild(new DynamicBorder());
 
 		this.settingsList = new SettingsList(
@@ -735,6 +755,7 @@ export class SettingsSelectorComponent extends Container {
 			10,
 			getSettingsListTheme(),
 			(id, newValue) => {
+				// SettingsList 提供字符串值，分派层负责恢复 boolean、number 和协议联合类型后再通知宿主。
 				switch (id) {
 					case "autocompact":
 						callbacks.onAutoCompactChange(newValue === "true");
@@ -824,6 +845,7 @@ export class SettingsSelectorComponent extends Container {
 				}
 			},
 			callbacks.onCancel,
+			// 搜索由通用 SettingsList 按标签/描述过滤，选中值仍绑定原始 item id。
 			{ enableSearch: true },
 		);
 

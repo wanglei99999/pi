@@ -37,6 +37,7 @@ export interface FindToolDetails {
 /**
  * Pluggable operations for the find tool.
  * Override these to delegate file search to remote systems (for example SSH).
+ * 自定义操作允许把存在性检查和 glob 搜索委托给远端系统，同时复用相同的结果截断与渲染协议。
  */
 export interface FindOperations {
 	/** Check if path exists */
@@ -48,6 +49,7 @@ export interface FindOperations {
 const defaultFindOperations: FindOperations = {
 	exists: pathExists,
 	// This is a placeholder. Actual fd execution happens in execute() when no custom glob is provided.
+	// 默认 glob 只是占位；未注入自定义实现时 execute() 直接启动 fd。
 	glob: () => [],
 };
 
@@ -152,6 +154,7 @@ export function createFindToolDefinition(
 						const ops = customOps ?? defaultFindOperations;
 
 						// If custom operations provide glob(), use that instead of fd.
+						// 自定义 glob 路径完全绕过本地 fd，但仍检查取消、结果上限和字节截断。
 						if (customOps?.glob) {
 							if (!(await ops.exists(searchPath))) {
 								settle(() => reject(new Error(`Path not found: ${searchPath}`)));
@@ -180,6 +183,7 @@ export function createFindToolDefinition(
 							}
 
 							// Relativize paths against the search root for stable output.
+							// 输出统一相对搜索根目录并使用 POSIX 分隔符，保证跨平台稳定。
 							const relativized = results.map((p) => {
 								if (p.startsWith(searchPath)) return toPosixPath(p.slice(searchPath.length + 1));
 								return toPosixPath(path.relative(searchPath, p));
@@ -211,6 +215,7 @@ export function createFindToolDefinition(
 						}
 
 						// Default implementation uses fd.
+						// 默认实现确保 fd 可用后以子进程执行，并支持 AbortSignal 终止。
 						const fdPath = await ensureTool("fd", true);
 						if (signal?.aborted) {
 							settle(() => reject(new Error("Operation aborted")));
@@ -227,6 +232,7 @@ export function createFindToolDefinition(
 						// there. Inside repos, use fd's default git-aware behavior so parent
 						// .gitignore rules stop at nested repo boundaries:
 						// https://github.com/earendil-works/pi/issues/5960
+						// 仓库内保留 fd 的 Git 边界语义；仓库外启用 --no-require-git 仍读取邻近 ignore 文件。
 						let insideGitRepo = false;
 						for (let current = searchPath; ; ) {
 							if (await pathExists(path.join(current, ".git"))) {
@@ -243,6 +249,7 @@ export function createFindToolDefinition(
 						// fd --glob matches against the basename unless --full-path is set; in --full-path
 						// mode it matches against the absolute candidate path, so a path-containing
 						// pattern like 'src/**/*.spec.ts' needs a leading '**/' to match anything.
+						// 含路径分隔符的 glob 切换到 --full-path，并补齐相对模式前缀以匹配绝对候选路径。
 						let effectivePattern = pattern;
 						if (pattern.includes("/")) {
 							args.push("--full-path");

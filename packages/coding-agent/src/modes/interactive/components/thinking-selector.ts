@@ -20,6 +20,9 @@ const LEVEL_DESCRIPTIONS: Record<ThinkingLevel, string> = {
 /**
  * Component that renders a thinking level selector with borders
  */
+/**
+ * 渲染带边框的推理级别选择器。
+ */
 export class ThinkingSelectorComponent extends Container {
 	private selectList: SelectList;
 
@@ -38,9 +41,11 @@ export class ThinkingSelectorComponent extends Container {
 		}));
 
 		// Add top border
+		// 添加顶部边框。
 		this.addChild(new DynamicBorder());
 
 		// Create selector
+		// 仅使用当前模型支持的级别构建选择列表，高度随可选项数量变化。
 		this.selectList = new SelectList(
 			thinkingLevels,
 			thinkingLevels.length,
@@ -49,6 +54,7 @@ export class ThinkingSelectorComponent extends Container {
 		);
 
 		// Preselect current level
+		// 当前级别仍在可用集合中时恢复其选中状态。
 		const currentIndex = thinkingLevels.findIndex((item) => item.value === currentLevel);
 		if (currentIndex !== -1) {
 			this.selectList.setSelectedIndex(currentIndex);
@@ -65,6 +71,7 @@ export class ThinkingSelectorComponent extends Container {
 		this.addChild(this.selectList);
 
 		// Add bottom border
+		// 添加底部边框。
 		this.addChild(new DynamicBorder());
 	}
 

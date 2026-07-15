@@ -1,6 +1,9 @@
 /**
  * TUI session selector for --resume flag
  */
+/**
+ * --resume 参数使用的 TUI 会话选择器。
+ */
 
 import { setKeybindings } from "@earendil-works/pi-tui";
 import { KeybindingsManager } from "../core/keybindings.ts";
@@ -12,6 +15,7 @@ import { createStartupTui, startStartupTui } from "./startup-ui.ts";
 type SessionsLoader = (onProgress?: SessionListProgress) => Promise<SessionInfo[]>;
 
 /** Show TUI session selector and return selected session path or null if cancelled */
+/** 显示 TUI 会话选择器；选择后返回会话路径，取消时返回 null。 */
 export async function selectSession(
 	currentSessionsLoader: SessionsLoader,
 	allSessionsLoader: SessionsLoader,

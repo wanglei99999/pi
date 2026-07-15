@@ -28,6 +28,7 @@ const ANALYTICS_OPTIONS: Array<{ value: boolean; label: string }> = [
 
 const SETUP_LOGO_LINES = ["██████", "██  ██", "████  ██", "██    ██"];
 
+// 首次设置对话框：依次选择主题并决定是否加入匿名使用数据收集。
 /** First-time setup dialog: theme choice and analytics opt-in. */
 export class FirstTimeSetupComponent extends Container {
 	private step: "theme" | "analytics" = "theme";
@@ -46,6 +47,7 @@ export class FirstTimeSetupComponent extends Container {
 	}
 
 	// Rebuild the whole dialog on every change so theme previews recolor all text.
+	// 每次状态变化都重建整个对话框，使主题预览能立即重新着色所有文本。
 	private update(): void {
 		this.clear();
 		this.addChild(new DynamicBorder());
@@ -110,6 +112,7 @@ export class FirstTimeSetupComponent extends Container {
 	}
 
 	private moveSelection(delta: number): void {
+		// 主题步骤会实时通知预览；分析选项只更新本地选择，提交时才持久化。
 		if (this.step === "theme") {
 			const next = Math.max(0, Math.min(THEME_OPTIONS.length - 1, this.themeIndex + delta));
 			if (next !== this.themeIndex) {
@@ -123,6 +126,7 @@ export class FirstTimeSetupComponent extends Container {
 	}
 
 	handleInput(keyData: string): void {
+		// 除可配置快捷键外保留 j/k 导航，便于首次启动时使用熟悉的终端操作。
 		const kb = getKeybindings();
 		if (kb.matches(keyData, "tui.select.up") || keyData === "k") {
 			this.moveSelection(-1);

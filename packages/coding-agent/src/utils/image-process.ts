@@ -2,8 +2,10 @@ import { convertImageBytesToPng } from "./image-convert.ts";
 import { formatDimensionNote, type ImageResizeOptions, resizeImage } from "./image-resize.ts";
 
 export interface ProcessImageOptions {
+	// 是否将图片缩放到内联提供商限制以内；默认启用。
 	/** Whether to resize images to inline provider limits. Default: true */
 	autoResizeImages?: boolean;
+	// 可选缩放覆盖；省略时使用 resizeImage 默认配置。
 	/** Optional resize overrides. Uses resizeImage defaults when omitted. */
 	resizeOptions?: ImageResizeOptions;
 }
@@ -47,6 +49,7 @@ function normalizeSupportedImageMimeType(mimeType: string): string | null {
 }
 
 async function normalizeImage(bytes: Uint8Array, mimeType: string): Promise<NormalizedImage | null> {
+	// 已支持格式只规范 MIME；其他可解码格式统一转为 PNG，避免 provider 接收未知格式。
 	const normalizedMimeType = normalizeSupportedImageMimeType(mimeType);
 	if (normalizedMimeType) {
 		return { bytes, mimeType: normalizedMimeType };
@@ -84,6 +87,7 @@ export async function processImage(
 	}
 
 	if (autoResizeImages) {
+		// 转换后再缩放，使尺寸和负载限制基于最终发送给 provider 的编码格式。
 		const resized = await resizeImage(normalized.bytes, normalized.mimeType, options?.resizeOptions);
 		if (!resized) {
 			return {
@@ -107,6 +111,7 @@ export async function processImage(
 	}
 
 	const hints: string[] = [];
+	// 禁用缩放时仍保留格式转换提示，并直接编码规范化后的完整图片。
 	const convertedHint = conversionHint(normalized.convertedFrom, normalized.mimeType);
 	if (convertedHint) hints.push(convertedHint);
 

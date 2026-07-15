@@ -11,11 +11,18 @@ import { SessionManager } from "../session-manager.ts";
 /**
  * Interface for rendering custom tools to HTML.
  * Used by agent-session to pre-render extension tool output.
+ * 扩展工具通过该接口把 TUI 渲染结果预转换为 HTML，内置模板无法识别的工具仍能在导出文件中展示。
  */
 export interface ToolHtmlRenderer {
-	/** Render a tool call to HTML. Returns undefined if tool has no custom renderer. */
+	/**
+	 * Render a tool call to HTML. Returns undefined if tool has no custom renderer.
+	 * 渲染工具调用；没有自定义渲染器时返回 undefined 交由默认路径处理。
+	 */
 	renderCall(toolCallId: string, toolName: string, args: unknown): string | undefined;
-	/** Render a tool result to HTML. Returns collapsed/expanded or undefined if tool has no custom renderer. */
+	/**
+	 * Render a tool result to HTML. Returns collapsed/expanded or undefined if tool has no custom renderer.
+	 * 工具结果可分别提供折叠和展开 HTML；没有自定义渲染时返回 undefined。
+	 */
 	renderResult(
 		toolCallId: string,
 		toolName: string,
@@ -25,7 +32,10 @@ export interface ToolHtmlRenderer {
 	): { collapsed?: string; expanded?: string } | undefined;
 }
 
-/** Pre-rendered HTML for a custom tool call and result */
+/**
+ * Pre-rendered HTML for a custom tool call and result
+ * 以工具调用 ID 关联的预渲染调用及折叠/展开结果片段。
+ */
 interface RenderedToolHtml {
 	callHtml?: string;
 	resultHtmlCollapsed?: string;
@@ -35,7 +45,10 @@ interface RenderedToolHtml {
 export interface ExportOptions {
 	outputPath?: string;
 	themeName?: string;
-	/** Optional tool renderer for custom tools */
+	/**
+	 * Optional tool renderer for custom tools
+	 * 可选的扩展工具预渲染器。
+	 */
 	toolRenderer?: ToolHtmlRenderer;
 }
 
@@ -77,7 +90,10 @@ function adjustBrightness(color: string, factor: number): string {
 	return `rgb(${adjust(parsed.r)}, ${adjust(parsed.g)}, ${adjust(parsed.b)})`;
 }
 
-/** Derive export background colors from a base color (e.g., userMessageBg). */
+/**
+ * Derive export background colors from a base color (e.g., userMessageBg).
+ * 在主题未显式提供导出配色时，依据基础色亮度推导页面、卡片和信息区域背景，并保证明暗方向一致。
+ */
 function deriveExportColors(baseColor: string): { pageBg: string; cardBg: string; infoBg: string } {
 	const parsed = parseColor(baseColor);
 	if (!parsed) {
@@ -107,6 +123,7 @@ function deriveExportColors(baseColor: string): { pageBg: string; cardBg: string
 
 /**
  * Generate CSS custom property declarations from theme colors.
+ * 将已解析主题色写成 CSS 自定义属性；导出专用颜色优先，缺失时才使用推导值。
  */
 function generateThemeVars(themeName?: string): string {
 	const colors = getResolvedThemeColors(themeName);
@@ -116,6 +133,7 @@ function generateThemeVars(themeName?: string): string {
 	}
 
 	// Use explicit theme export colors if available, otherwise derive from userMessageBg
+	// 导出主题字段具有最高优先级，回退基色使用 userMessageBg。
 	const themeExport = getThemeExportColors(themeName);
 	const userMessageBg = colors.userMessageBg || "#343541";
 	const derivedColors = deriveExportColors(userMessageBg);
@@ -133,12 +151,16 @@ interface SessionData {
 	leafId: string | null;
 	systemPrompt?: string;
 	tools?: Array<Pick<ToolDefinition, "name" | "description" | "parameters">>;
-	/** Pre-rendered HTML for custom tool calls/results, keyed by tool call ID */
+	/**
+	 * Pre-rendered HTML for custom tool calls/results, keyed by tool call ID
+	 * 扩展工具 HTML 以 tool call ID 为键，便于模板把调用和结果配对。
+	 */
 	renderedTools?: Record<string, RenderedToolHtml>;
 }
 
 /**
  * Core HTML generation logic shared by both export functions.
+ * 两种导出入口共享的 HTML 组装流程：内联模板、主题 CSS、会话数据及本地 vendor 脚本，生成单文件产物。
  */
 function generateHtml(sessionData: SessionData, themeName?: string): string {
 	const templateDir = getExportTemplateDir();
@@ -157,9 +179,11 @@ function generateHtml(sessionData: SessionData, themeName?: string): string {
 	const infoBg = themeExport.infoBg ?? derivedExportColors.infoBg;
 
 	// Base64 encode session data to avoid escaping issues
+	// 会话 JSON 使用 base64 注入，避免内容与 HTML/JavaScript 转义边界相互干扰。
 	const sessionDataBase64 = Buffer.from(JSON.stringify(sessionData)).toString("base64");
 
 	// Build the CSS with theme variables injected
+	// 在静态样式模板中注入已解析的主题变量和导出背景色。
 	const css = templateCss
 		.replace("{{THEME_VARS}}", themeVars)
 		.replace("{{BODY_BG}}", bodyBg)
@@ -174,11 +198,15 @@ function generateHtml(sessionData: SessionData, themeName?: string): string {
 		.replace("{{HIGHLIGHT_JS}}", hljsJs);
 }
 
-/** Tools rendered directly by the HTML template (not pre-rendered via TUI→ANSI→HTML pipeline) */
+/**
+ * Tools rendered directly by the HTML template (not pre-rendered via TUI→ANSI→HTML pipeline)
+ * 这些内置工具由 HTML 模板直接理解，无需经过 TUI→ANSI→HTML 的预渲染链路。
+ */
 const TEMPLATE_RENDERED_TOOLS = new Set(["bash", "read", "write", "edit", "ls"]);
 
 /**
  * Pre-render custom tools to HTML using their TUI renderers.
+ * 遍历会话中的工具调用和结果，仅对模板不原生支持的扩展工具调用其 TUI 渲染器并按 ID 合并输出。
  */
 function preRenderCustomTools(
 	entries: SessionEntry[],
@@ -191,6 +219,7 @@ function preRenderCustomTools(
 		const msg = entry.message;
 
 		// Find tool calls in assistant messages
+		// 助手消息中的非内置工具调用先建立调用 HTML。
 		if (msg.role === "assistant" && Array.isArray(msg.content)) {
 			for (const block of msg.content) {
 				if (block.type === "toolCall" && !TEMPLATE_RENDERED_TOOLS.has(block.name)) {
@@ -203,9 +232,11 @@ function preRenderCustomTools(
 		}
 
 		// Find tool results
+		// 工具结果随后与已有调用片段合并，也允许只有结果渲染器的扩展工具。
 		if (msg.role === "toolResult" && msg.toolCallId) {
 			const toolName = msg.toolName || "";
 			// Only render if we have a pre-rendered call OR it's not template-rendered
+			// 已有预渲染调用或模板不支持该工具时，才调用扩展结果渲染器。
 			const existing = renderedTools[msg.toolCallId];
 			if (existing || !TEMPLATE_RENDERED_TOOLS.has(toolName)) {
 				const rendered = toolRenderer.renderResult(
@@ -232,6 +263,7 @@ function preRenderCustomTools(
 /**
  * Export session to HTML using SessionManager and AgentState.
  * Used by TUI's /export command.
+ * TUI /export 使用实时 AgentState 补充系统提示、工具定义和扩展工具预渲染结果。
  */
 export async function exportSessionToHtml(
 	sm: SessionManager,
@@ -251,10 +283,12 @@ export async function exportSessionToHtml(
 	const entries = sm.getEntries();
 
 	// Pre-render custom tools if a tool renderer is provided
+	// 仅在宿主提供渲染器时预渲染扩展工具，并省略空映射以减小导出数据。
 	let renderedTools: Record<string, RenderedToolHtml> | undefined;
 	if (opts.toolRenderer) {
 		renderedTools = preRenderCustomTools(entries, opts.toolRenderer);
 		// Only include if we actually rendered something
+		// 没有生成任何片段时不向模板注入 renderedTools。
 		if (Object.keys(renderedTools).length === 0) {
 			renderedTools = undefined;
 		}
@@ -284,6 +318,7 @@ export async function exportSessionToHtml(
 /**
  * Export session file to HTML (standalone, without AgentState).
  * Used by CLI for exporting arbitrary session files.
+ * CLI 独立导出只依赖持久化 JSONL，不包含运行时 AgentState 或扩展工具渲染信息。
  */
 export async function exportFromFile(inputPath: string, options?: ExportOptions | string): Promise<string> {
 	const opts: ExportOptions = typeof options === "string" ? { outputPath: options } : options || {};

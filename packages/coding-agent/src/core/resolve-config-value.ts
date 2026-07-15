@@ -1,12 +1,14 @@
 /**
  * Resolve configuration values that may be shell commands, environment variables, or literals.
  * Used by auth-storage.ts and model-registry.ts.
+ * 配置值支持命令、环境变量模板和字面量三种形式，供认证与模型注册共享一致的解析规则。
  */
 
 import { execSync, spawnSync } from "child_process";
 import { getShellConfig } from "../utils/shell.ts";
 
 // Cache for shell command results (persists for process lifetime)
+// 命令型配置默认按原始配置串缓存整个进程生命周期，避免重复调用外部密钥命令。
 const commandResultCache = new Map<string, string | undefined>();
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ENV_VAR_NAME_PREFIX_RE = /^[A-Za-z_][A-Za-z0-9_]*/;
@@ -141,6 +143,9 @@ export function isConfigValueConfigured(config: string, env?: Record<string, str
  * - Interpolates "$ENV_VAR" or "${ENV_VAR}" references with the named environment variable
  * - In non-command values, "$$" escapes a literal "$" and "$!" escapes a literal "!"
  * - Otherwise treats the value as a literal
+ *
+ * `!` 前缀执行 shell 命令；普通值只展开明确的环境变量模板，并支持 $$/$! 转义。
+ * 任一引用变量缺失时整个模板解析为 undefined，避免生成部分凭证。
  */
 export function resolveConfigValue(config: string, env?: Record<string, string>): string | undefined {
 	const reference = parseConfigValueReference(config);
@@ -217,6 +222,7 @@ function executeCommand(commandConfig: string): string | undefined {
 
 /**
  * Resolve all header values using the same resolution logic as API keys.
+ * 不使用进程级命令缓存解析单个配置值，适合需要每次重新获取动态凭证的严格调用路径。
  */
 export function resolveConfigValueUncached(config: string, env?: Record<string, string>): string | undefined {
 	const reference = parseConfigValueReference(config);
@@ -252,6 +258,7 @@ export function resolveConfigValueOrThrow(config: string, description: string, e
 
 /**
  * Resolve all header values using the same resolution logic as API keys.
+ * 逐个解析请求头，无法解析的可选头被省略；结果为空时返回 undefined。
  */
 export function resolveHeaders(
 	headers: Record<string, string> | undefined,
@@ -281,7 +288,10 @@ export function resolveHeadersOrThrow(
 	return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
 
-/** Clear the config value command cache. Exported for testing. */
+/**
+ * Clear the config value command cache. Exported for testing.
+ * 清空命令型配置缓存，使测试或显式刷新能够重新执行外部命令。
+ */
 export function clearConfigValueCache(): void {
 	commandResultCache.clear();
 }

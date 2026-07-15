@@ -1,5 +1,6 @@
 /**
  * Core modules shared between all run modes.
+ * 所有运行模式共享的核心模块公共入口，集中暴露会话、运行时服务、事件总线和扩展 API。
  */
 
 export {
@@ -30,6 +31,7 @@ export type { CompactionResult } from "./compaction/index.ts";
 export { createEventBus, type EventBus, type EventBusController } from "./event-bus.ts";
 export { areExperimentalFeaturesEnabled } from "./experimental.ts";
 // Extensions system
+// 扩展系统的公共类型与运行入口；具体加载和生命周期仍由 core/extensions 管理。
 export {
 	type AgentEndEvent,
 	type AgentSettledEvent,

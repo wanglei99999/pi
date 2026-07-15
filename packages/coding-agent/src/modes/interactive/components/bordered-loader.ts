@@ -3,6 +3,7 @@ import type { Theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint } from "./keybinding-hints.ts";
 
+// 为扩展 UI 提供带边框的加载器，并统一可取消与不可取消两种实现的 signal 接口。
 /** Loader wrapped with borders for extension UI */
 export class BorderedLoader extends Container {
 	private loader: CancellableLoader | Loader;
@@ -40,6 +41,7 @@ export class BorderedLoader extends Container {
 	}
 
 	get signal(): AbortSignal {
+		// 不可取消模式仍返回稳定 signal，便于扩展代码无需按模式分支。
 		if (this.cancellable) {
 			return (this.loader as CancellableLoader).signal;
 		}

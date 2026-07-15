@@ -1,6 +1,7 @@
 /**
  * TUI component for managing package resources (enable/disable)
  */
+/** 用于搜索、分组展示并启用或禁用包资源的 TUI 组件。 */
 
 import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
@@ -71,6 +72,7 @@ function formatBaseDir(baseDir: string): string {
 		displayPath = "~";
 	} else if (baseDir.startsWith(homeDir)) {
 		// Replace home prefix with ~, normalize separators for display
+		// 主目录内路径用 `~` 缩写，并统一为正斜杠显示。
 		const rest = baseDir.slice(homeDir.length);
 		displayPath = `~${rest.replace(/\\/g, "/")}`;
 	} else {
@@ -85,6 +87,7 @@ function getGroupLabel(metadata: PathMetadata, agentDir: string): string {
 		return `${metadata.source} (${metadata.scope})`;
 	}
 	// Top-level resources
+	// 顶层资源按自动发现或显式 settings 来源生成分组标签。
 	if (metadata.source === "auto") {
 		if (metadata.baseDir) {
 			return metadata.scope === "user"
@@ -97,6 +100,7 @@ function getGroupLabel(metadata: PathMetadata, agentDir: string): string {
 }
 
 function buildGroups(resolved: ResolvedPaths, agentDir: string): ResourceGroup[] {
+	// 先按来源、作用域和基础目录分组，再按资源类型建立子组。
 	const groupMap = new Map<string, ResourceGroup>();
 
 	const addToGroup = (resources: ResolvedResource[], resourceType: ResourceType) => {
@@ -156,6 +160,7 @@ function buildGroups(resolved: ResolvedPaths, agentDir: string): ResourceGroup[]
 	addToGroup(resolved.themes, "themes");
 
 	// Sort groups: packages first, then top-level; user before project
+	// 分组排序优先 package，再到顶层资源；同类中 user 先于 project。
 	const groups = Array.from(groupMap.values());
 	groups.sort((a, b) => {
 		if (a.origin !== b.origin) {
@@ -168,6 +173,7 @@ function buildGroups(resolved: ResolvedPaths, agentDir: string): ResourceGroup[]
 	});
 
 	// Sort subgroups within each group by type order, and items by name
+	// 子组使用固定资源类型顺序，组内条目按显示名排序。
 	const typeOrder: Record<ResourceType, number> = { extensions: 0, skills: 1, prompts: 2, themes: 3 };
 	for (const group of groups) {
 		group.subgroups.sort((a, b) => typeOrder[a.type] - typeOrder[b.type]);
@@ -243,6 +249,7 @@ class ResourceList implements Component, Focusable {
 	}
 	set focused(value: boolean) {
 		this._focused = value;
+		// 焦点转发给搜索 Input，以输出硬件光标标记并支持 IME。
 		this.searchInput.focused = value;
 	}
 
@@ -262,6 +269,7 @@ class ResourceList implements Component, Focusable {
 		this.inheritedEnabledByKey = this.buildInheritedEnabledMap(groupsByScope.global);
 		this.searchInput = new Input();
 		// 8 lines of chrome: top spacer + top border + spacer + header (2 lines) + spacer + bottom spacer + bottom border
+		// 扣除固定八行界面装饰后计算列表最大可见行数，并至少保留五行。
 		const chrome = 8;
 		this.maxVisible = Math.max(5, (terminalHeight ?? 24) - chrome);
 		this.buildFlatList();
@@ -279,6 +287,7 @@ class ResourceList implements Component, Focusable {
 	}
 
 	private buildInheritedEnabledMap(groups: ResourceGroup[]): Map<string, boolean> {
+		// 缓存全局资源的有效启用状态，供 project 模式计算 inherit/load/unload。
 		const result = new Map<string, boolean>();
 		for (const group of groups) {
 			for (const subgroup of group.subgroups) {
@@ -291,6 +300,7 @@ class ResourceList implements Component, Focusable {
 	}
 
 	private buildFlatList(): void {
+		// 将 group、subgroup 和 item 按显示顺序扁平化，导航只停留在 item。
 		this.flatItems = [];
 		for (const group of this.groups) {
 			this.flatItems.push({ type: "group", group });
@@ -302,6 +312,7 @@ class ResourceList implements Component, Focusable {
 			}
 		}
 		// Start selection on first item (not header)
+		// 初始选择跳过不可操作的分组标题，定位第一项资源。
 		this.selectedIndex = this.flatItems.findIndex((e) => e.type === "item");
 		if (this.selectedIndex < 0) this.selectedIndex = 0;
 	}
@@ -315,9 +326,11 @@ class ResourceList implements Component, Focusable {
 			idx += direction;
 		}
 		return fromIndex; // Stay at current if no item found
+		// 方向上没有其他资源项时保持当前选择。
 	}
 
 	private filterItems(query: string): void {
+		// 搜索同时匹配显示名、资源类型和完整路径，并保留命中项的组标题层级。
 		if (!query.trim()) {
 			this.filteredItems = [...this.flatItems];
 			this.selectFirstItem();
@@ -343,6 +356,7 @@ class ResourceList implements Component, Focusable {
 		}
 
 		// Find which subgroups and groups contain matching items
+		// 反向收集命中项所属的子组和组，避免过滤结果失去上下文。
 		for (const group of this.groups) {
 			for (const subgroup of group.subgroups) {
 				for (const item of subgroup.items) {
@@ -376,6 +390,7 @@ class ResourceList implements Component, Focusable {
 	updateItem(item: ResourceItem, enabled: boolean): void {
 		item.enabled = enabled;
 		// Update in groups too
+		// 同步更新分组数据中的对应项，使切换过滤或作用域后状态一致。
 		for (const group of this.groups) {
 			for (const subgroup of group.subgroups) {
 				const found = subgroup.items.find((i) => i.path === item.path && i.resourceType === item.resourceType);
@@ -393,6 +408,7 @@ class ResourceList implements Component, Focusable {
 		const lines: string[] = [];
 
 		// Search input
+		// 搜索输入始终位于列表顶部并接收未被导航快捷键消费的文本。
 		lines.push(...this.searchInput.render(width));
 		lines.push("");
 
@@ -402,6 +418,7 @@ class ResourceList implements Component, Focusable {
 		}
 
 		// Calculate visible range
+		// 以选中项为中心计算垂直窗口，并限制在过滤列表范围内。
 		const startIndex = Math.max(
 			0,
 			Math.min(this.selectedIndex - Math.floor(this.maxVisible / 2), this.filteredItems.length - this.maxVisible),
@@ -414,17 +431,20 @@ class ResourceList implements Component, Focusable {
 
 			if (entry.type === "group") {
 				// Main group header (no cursor)
+				// 主分组标题不可选；project 模式中的全局继承组使用弱化样式。
 				const inherited = this.writeScope === "project" && entry.group.scope === "user";
 				const label = theme.bold(`${entry.group.label}${inherited ? " · inherited global" : ""}`);
 				const groupLine = theme.fg(inherited ? "dim" : "accent", label);
 				lines.push(truncateToWidth(`  ${groupLine}`, width, ""));
 			} else if (entry.type === "subgroup") {
 				// Subgroup header (indented, no cursor)
+				// 资源类型子组缩进显示且不参与选择。
 				const color = this.writeScope === "project" && entry.group.scope === "user" ? "dim" : "muted";
 				const subgroupLine = theme.fg(color, entry.subgroup.label);
 				lines.push(truncateToWidth(`    ${subgroupLine}`, width, ""));
 			} else {
 				// Resource item (cursor only on items)
+				// 只有实际资源项显示选择光标和可切换状态。
 				const item = entry.item;
 				const cursor = isSelected ? "> " : "  ";
 				const dimmed = this.isDimmedItem(item);
@@ -441,6 +461,7 @@ class ResourceList implements Component, Focusable {
 		}
 
 		// Scroll indicator
+		// 列表超出窗口时按可操作资源项而非标题统计当前位置。
 		if (startIndex > 0 || endIndex < this.filteredItems.length) {
 			const itemCount = this.filteredItems.filter((e) => e.type === "item").length;
 			const currentItemIndex =
@@ -464,6 +485,7 @@ class ResourceList implements Component, Focusable {
 		}
 		if (kb.matches(data, "tui.select.pageUp")) {
 			// Jump up by maxVisible, then find nearest item
+			// 向上翻一页后跳过标题，选择目标附近的第一个资源项。
 			let target = Math.max(0, this.selectedIndex - this.maxVisible);
 			while (target < this.filteredItems.length && this.filteredItems[target].type !== "item") {
 				target++;
@@ -475,6 +497,7 @@ class ResourceList implements Component, Focusable {
 		}
 		if (kb.matches(data, "tui.select.pageDown")) {
 			// Jump down by maxVisible, then find nearest item
+			// 向下翻一页后反向跳过标题，落到最近资源项。
 			let target = Math.min(this.filteredItems.length - 1, this.selectedIndex + this.maxVisible);
 			while (target >= 0 && this.filteredItems[target].type !== "item") {
 				target--;
@@ -509,11 +532,13 @@ class ResourceList implements Component, Focusable {
 		}
 
 		// Pass to search input
+		// 未被快捷键处理的输入交给搜索框，并立即重算过滤结果。
 		this.searchInput.handleInput(data);
 		this.filterItems(this.searchInput.getValue());
 	}
 
 	private toggleResource(item: ResourceItem): boolean | undefined {
+		// project 模式循环 inherit/load/unload；global 模式直接切换有效启用状态。
 		if (this.writeScope === "project") {
 			const state = this.getNextOverrideState(item);
 			if (!this.setProjectResourceOverride(item, state)) return undefined;
@@ -538,11 +563,13 @@ class ResourceList implements Component, Focusable {
 		const current = (settings[arrayKey] ?? []) as string[];
 
 		// Generate pattern for this resource
+		// 为资源生成相对当前 settings 作用域的匹配模式。
 		const pattern = this.getResourcePattern(item);
 		const disablePattern = `-${pattern}`;
 		const enablePattern = `+${pattern}`;
 
 		// Filter out existing patterns for this resource
+		// 保存前移除同一资源既有的正负模式，避免产生冲突条目。
 		const updated = current.filter((p) => {
 			const stripped = p.startsWith("!") || p.startsWith("+") || p.startsWith("-") ? p.slice(1) : p;
 			return stripped !== pattern;
@@ -593,21 +620,25 @@ class ResourceList implements Component, Focusable {
 		let pkg = packages[pkgIndex];
 
 		// Convert string to object form if needed
+		// 只有需要写入资源过滤器时才把简写 package source 展开为对象。
 		if (typeof pkg === "string") {
 			pkg = { source: pkg };
 			packages[pkgIndex] = pkg;
 		}
 
 		// Get the resource array for this type
+		// 读取当前 package 中对应资源类型的过滤模式数组。
 		const arrayKey = item.resourceType as "extensions" | "skills" | "prompts" | "themes";
 		const current = (pkg[arrayKey] ?? []) as string[];
 
 		// Generate pattern relative to package root
+		// package 资源模式相对包根目录生成。
 		const pattern = this.getPackageResourcePattern(item);
 		const disablePattern = `-${pattern}`;
 		const enablePattern = `+${pattern}`;
 
 		// Filter out existing patterns for this resource
+		// 移除该资源旧模式后写入新的启用或禁用状态。
 		const updated = current.filter((p) => {
 			const stripped = p.startsWith("!") || p.startsWith("+") || p.startsWith("-") ? p.slice(1) : p;
 			return stripped !== pattern;
@@ -622,6 +653,7 @@ class ResourceList implements Component, Focusable {
 		(pkg as Record<string, unknown>)[arrayKey] = updated.length > 0 ? updated : undefined;
 
 		// Clean up empty filter object
+		// 所有资源过滤器清空后恢复字符串简写，避免保存冗余对象。
 		const hasFilters = ["extensions", "skills", "prompts", "themes"].some(
 			(k) => (pkg as Record<string, unknown>)[k] !== undefined,
 		);
@@ -729,6 +761,7 @@ class ResourceList implements Component, Focusable {
 	}
 
 	private getNextOverrideState(item: ResourceItem): ProjectOverrideState {
+		// 三态循环会结合继承值，使每次切换都产生可见的有效状态变化。
 		const state = this.getProjectOverrideState(item);
 		const inheritedEnabled = this.getInheritedEnabled(item);
 		if (state === "inherit") return inheritedEnabled ? "unload" : "load";
@@ -761,6 +794,7 @@ class ResourceList implements Component, Focusable {
 		patterns: Set<string>,
 		emptyArrayIsUnload: boolean,
 	): ProjectOverrideState {
+		// 按 settings 中最后匹配的模式推导覆盖状态；空数组可按 package autoload 语义表示 unload。
 		if (entries.length === 0 && emptyArrayIsUnload) return "unload";
 		let state: ProjectOverrideState = "inherit";
 		for (const entry of entries) {
@@ -783,6 +817,7 @@ class ResourceList implements Component, Focusable {
 	}
 
 	private getTopLevelOverridePatterns(item: ResourceItem, scope: SettingsScope): Set<string> {
+		// 同时接受作用域相对路径、绝对路径和来源 baseDir 相对路径，以识别历史或不同写法的等价配置。
 		const baseDir = this.getTopLevelBaseDir(scope);
 		const patterns = new Set<string>([
 			this.getResourcePatternForScope(item, scope),
@@ -813,6 +848,7 @@ class ResourceList implements Component, Focusable {
 		rightSource: string,
 		rightScope: SettingsScope,
 	): boolean {
+		// package source 字符串不同但均为本地路径时，按各自作用域解析后比较规范绝对路径。
 		if (leftSource === rightSource) return true;
 		if (!isLocalPath(leftSource) || !isLocalPath(rightSource)) return false;
 		const left = resolvePath(leftSource, this.getTopLevelBaseDir(leftScope), { trim: true });
@@ -898,6 +934,7 @@ export class ConfigSelectorComponent extends Container implements Focusable {
 		};
 
 		// Add header
+		// 顶部区域展示当前写入作用域和可用操作提示。
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
@@ -906,6 +943,7 @@ export class ConfigSelectorComponent extends Container implements Focusable {
 		this.addChild(new Spacer(1));
 
 		// Resource list
+		// 资源列表共享 global/project 两套分组，并负责搜索、导航和持久化切换。
 		this.resourceList = new ResourceList(
 			groupsByScope,
 			settingsManager,
@@ -926,11 +964,13 @@ export class ConfigSelectorComponent extends Container implements Focusable {
 		this.addChild(this.resourceList);
 
 		// Bottom border
+		// 底部边框结束选择器布局。
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
 	}
 
 	private switchWriteScope(): void {
+		// Tab 在 global 与 project 写入模式间切换，并同步标题、分组和当前过滤结果。
 		this.writeScope = this.writeScope === "global" ? "project" : "global";
 		this.header.setWriteScope(this.writeScope);
 		this.resourceList.setWriteScope(this.writeScope);

@@ -65,6 +65,7 @@ export class RetryStatusIndicator extends StatusIndicator {
 	}
 
 	override dispose(): void {
+		// 先停止独立倒计时，再释放 Loader 动画，避免状态关闭后继续请求重绘。
 		this.countdown?.dispose();
 		this.countdown = undefined;
 		super.dispose();
@@ -105,6 +106,7 @@ export class BranchSummaryStatusIndicator extends StatusIndicator {
 export class IdleStatus implements Component {
 	invalidate(): void {
 		// No cached state to invalidate.
+		// 空闲占位不缓存渲染状态，因此无需失效处理。
 	}
 
 	render(width: number): string[] {

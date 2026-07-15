@@ -81,6 +81,8 @@ import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } fro
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
 export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
+// This set is the authoritative registry of built-in tool names accepted by the factories below.
+// 此集合是下方工厂所接受内置工具名的权威注册表。
 export const allToolNames: Set<ToolName> = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 
 export interface ToolsOptions {
@@ -93,6 +95,8 @@ export interface ToolsOptions {
 	ls?: LsToolOptions;
 }
 
+// Bind a definition to one cwd and its tool-specific options without starting execution.
+// 将工具定义绑定到指定 cwd 与专属选项，但此阶段不会启动任何执行。
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
 	switch (toolName) {
 		case "read":
@@ -114,6 +118,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 	}
 }
 
+// Create the executable runtime form; cwd and options are injected once at construction time.
+// 创建可执行的运行时形态；cwd 与选项在构造时一次性注入。
 export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptions): Tool {
 	switch (toolName) {
 		case "read":
@@ -135,6 +141,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 	}
 }
 
+// Coding tools intentionally include mutation and command execution capabilities.
+// coding 工具集明确包含文件修改与命令执行能力。
 export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
 	return [
 		createReadToolDefinition(cwd, options?.read),
@@ -144,6 +152,8 @@ export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions)
 	];
 }
 
+// Read-only registration excludes mutation and shell tools, defining a narrower execution boundary.
+// 只读注册排除修改类与 shell 工具，从而形成更窄的执行边界。
 export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
 	return [
 		createReadToolDefinition(cwd, options?.read),

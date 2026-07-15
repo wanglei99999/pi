@@ -24,6 +24,7 @@ export {
 	type SessionStats,
 } from "./core/agent-session.ts";
 // Auth and model registry
+// 公开认证存储后端和模型注册表，供嵌入方在不依赖 CLI 的情况下管理凭据与模型。
 export {
 	type ApiKeyCredential,
 	type AuthCredential,
@@ -59,6 +60,7 @@ export {
 } from "./core/compaction/index.ts";
 export { createEventBus, type EventBus, type EventBusController } from "./core/event-bus.ts";
 // Extension system
+// 扩展作者使用的主要公共表面：事件、上下文、工具定义、运行时和加载入口在此统一导出。
 export type {
 	AgentEndEvent,
 	AgentSettledEvent,
@@ -167,6 +169,7 @@ export {
 	wrapRegisteredTools,
 } from "./core/extensions/index.ts";
 // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
+// Footer 数据提供器补充扩展无法从常规上下文取得的 git 分支和扩展状态，只暴露只读接口。
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
 export { convertToLlm } from "./core/messages.ts";
 export { ModelRegistry } from "./core/model-registry.ts";
@@ -190,6 +193,7 @@ export { DefaultPackageManager } from "./core/package-manager.ts";
 export type { ResourceCollision, ResourceDiagnostic, ResourceLoader } from "./core/resource-loader.ts";
 export { DefaultResourceLoader, loadProjectContextFiles } from "./core/resource-loader.ts";
 // SDK for programmatic usage
+// 面向程序化嵌入的会话服务与工厂，避免调用方自行拼装 CLI/TUI 生命周期。
 export {
 	AgentSessionRuntime,
 	type AgentSessionRuntimeDiagnostic,
@@ -201,12 +205,14 @@ export {
 	type CreateAgentSessionRuntimeResult,
 	type CreateAgentSessionServicesOptions,
 	// Factory
+	// 分层工厂允许调用方选择默认组装、注入服务或只创建运行时。
 	createAgentSession,
 	createAgentSessionFromServices,
 	createAgentSessionRuntime,
 	createAgentSessionServices,
 	createBashTool,
 	// Tool factories (for custom cwd)
+	// 工具工厂可绑定自定义 cwd，适合嵌入式会话和隔离工作目录。
 	createCodingTools,
 	createEditTool,
 	createFindTool,
@@ -322,8 +328,10 @@ export {
 	type ProjectTrustUpdate,
 } from "./core/trust-manager.ts";
 // Main entry point
+// main 是完整 CLI 编排入口；库调用方通常应优先使用上方的程序化 SDK。
 export { type MainOptions, main } from "./main.ts";
 // Run modes for programmatic SDK usage
+// 可嵌入的交互、打印和 RPC 模式共享会话能力，但由调用方控制启动方式。
 export {
 	InteractiveMode,
 	type InteractiveModeOptions,
@@ -341,6 +349,7 @@ export {
 	runRpcMode,
 } from "./modes/index.ts";
 // UI components for extensions
+// 向扩展公开与内置交互界面一致的组件，便于复用焦点、键绑定和渲染行为。
 export {
 	ArminComponent,
 	AssistantMessageComponent,
@@ -380,6 +389,7 @@ export {
 	type VisualTruncateResult,
 } from "./modes/interactive/components/index.ts";
 // Theme utilities for custom tools and extensions
+// 自定义工具和扩展应通过这些主题工具渲染，才能跟随当前终端主题及代码高亮配置。
 export {
 	getLanguageFromPath,
 	getMarkdownTheme,

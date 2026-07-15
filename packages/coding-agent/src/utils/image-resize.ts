@@ -11,6 +11,7 @@ interface ResizeImageWorkerResponse {
 function toTransferableBytes(input: Uint8Array): Uint8Array<ArrayBuffer> {
 	// Transfer detaches the buffer, so transfer a worker-owned copy and leave the
 	// caller's bytes intact.
+	// 转移 ArrayBuffer 会使原缓冲区失效，因此先复制一份归 worker 所有，保留调用方数据可用。
 	return new Uint8Array(input);
 }
 
@@ -32,6 +33,7 @@ async function resizeImageInWorker(
 	try {
 		const inputBytesForWorker = toTransferableBytes(inputBytes);
 		return await new Promise<ResizedImage | null>((resolve, reject) => {
+			// message、error 与 exit 可能竞争到达，settled 保证 Promise 只完成一次。
 			let settled = false;
 			const settle = (result: ResizedImage | null): void => {
 				if (settled) return;
@@ -71,6 +73,7 @@ async function resizeImageInWorker(
 			);
 		});
 	} finally {
+		// 无论消息处理成功或失败都终止 worker，避免线程与 WASM 资源滞留。
 		void worker.terminate().catch(() => undefined);
 	}
 }
@@ -81,6 +84,7 @@ async function resizeImageInWorker(
  * block the TUI event loop. If the worker cannot be loaded (for example in some
  * Bun compiled executable layouts), fall back to in-process resizing so image
  * reads still work.
+ * 在线程中运行 Photon，避免 WASM 解码、缩放和编码阻塞 TUI；worker 不可加载时回退到进程内处理。
  */
 export async function resizeImage(
 	inputBytes: Uint8Array,
@@ -96,6 +100,7 @@ export async function resizeImage(
 	// Bun compiled executables resolve worker entrypoints by string path, not via
 	// new URL(..., import.meta.url). Try the string path first under Bun so the
 	// release binary uses the embedded worker instead of falling back in-process.
+	// Bun 编译产物通过字符串路径解析内嵌 worker，因此优先使用该形式以避免不必要的进程内回退。
 	if (typeof process.versions.bun === "string") {
 		try {
 			return await resizeImageInWorker("./src/utils/image-resize-worker.ts", inputBytes, mimeType, options);
@@ -112,6 +117,7 @@ export async function resizeImage(
 /**
  * Format a dimension note for resized images.
  * This helps the model understand the coordinate mapping.
+ * 为缩放图片生成尺寸说明，帮助模型把显示坐标映射回原图坐标。
  */
 export function formatDimensionNote(result: ResizedImage): string | undefined {
 	if (!result.wasResized) {

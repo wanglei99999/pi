@@ -29,12 +29,16 @@ export interface LsToolDetails {
  * Pluggable operations for the ls tool.
  * Override these to delegate directory listing to remote systems (for example SSH).
  */
+/** 将文件系统操作抽象为可插拔接口，允许 SSH 等远程后端复用相同 ls 工具逻辑。 */
 export interface LsOperations {
 	/** Check if path exists */
+	/** 判断绝对路径是否存在。 */
 	exists: (absolutePath: string) => Promise<boolean> | boolean;
 	/** Get file or directory stats. Throws if not found. */
+	/** 获取路径类型信息；不存在时抛错。 */
 	stat: (absolutePath: string) => Promise<{ isDirectory: () => boolean }> | { isDirectory: () => boolean };
 	/** Read directory entries */
+	/** 读取目录中的直接子项名称。 */
 	readdir: (absolutePath: string) => Promise<string[]> | string[];
 }
 
@@ -46,6 +50,7 @@ const defaultLsOperations: LsOperations = {
 
 export interface LsToolOptions {
 	/** Custom operations for directory listing. Default: local filesystem */
+	/** 自定义目录操作实现，默认使用本地文件系统。 */
 	operations?: LsOperations;
 }
 
@@ -111,6 +116,7 @@ export function createLsToolDefinition(
 			_ctx?,
 		) {
 			return new Promise((resolve, reject) => {
+				// 执行前和执行期间都监听 AbortSignal，避免已取消调用继续访问远程或本地文件系统。
 				if (signal?.aborted) {
 					reject(new Error("Operation aborted"));
 					return;
@@ -125,12 +131,14 @@ export function createLsToolDefinition(
 						const effectiveLimit = limit ?? DEFAULT_LIMIT;
 
 						// Check if path exists.
+						// 在 stat 前先给出明确的路径不存在错误。
 						if (!(await ops.exists(dirPath))) {
 							reject(new Error(`Path not found: ${dirPath}`));
 							return;
 						}
 
 						// Check if path is a directory.
+						// 仅目录可继续列举，普通文件返回独立错误。
 						const stat = await ops.stat(dirPath);
 						if (!stat.isDirectory()) {
 							reject(new Error(`Not a directory: ${dirPath}`));
@@ -138,6 +146,7 @@ export function createLsToolDefinition(
 						}
 
 						// Read directory entries.
+						// 后端读取失败时转换为面向工具调用者的目录错误。
 						let entries: string[];
 						try {
 							entries = await ops.readdir(dirPath);
@@ -147,9 +156,11 @@ export function createLsToolDefinition(
 						}
 
 						// Sort alphabetically, case-insensitive.
+						// 使用不区分大小写的字母序，保证不同后端输出稳定。
 						entries.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
 
 						// Format entries with directory indicators.
+						// 逐项 stat 以给目录追加 `/`，同时执行条目数量上限。
 						const results: string[] = [];
 						let entryLimitReached = false;
 						for (const entry of entries) {
@@ -165,6 +176,7 @@ export function createLsToolDefinition(
 								if (entryStat.isDirectory()) suffix = "/";
 							} catch {
 								// Skip entries we cannot stat.
+								// 无法获取状态的条目跳过，避免单个权限或竞态错误终止整个列表。
 								continue;
 							}
 							results.push(entry + suffix);
@@ -179,10 +191,12 @@ export function createLsToolDefinition(
 
 						const rawOutput = results.join("\n");
 						// Apply byte truncation. There is no separate line limit because entry count is already capped.
+						// 条目数量已限制行数，因此这里只额外执行字节上限，并保留输出开头。
 						const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 						let output = truncation.content;
 						const details: LsToolDetails = {};
 						// Build actionable notices for truncation and entry limits.
+						// 分别记录条目上限和字节上限，并生成可操作的扩容提示。
 						const notices: string[] = [];
 						if (entryLimitReached) {
 							notices.push(`${effectiveLimit} entries limit reached. Use limit=${effectiveLimit * 2} for more`);

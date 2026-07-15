@@ -2,6 +2,7 @@
  * RPC Client for programmatic access to the coding agent.
  *
  * Spawns the agent in RPC mode and provides a typed API for all operations.
+ * 命令和响应通过 stdin/stdout 上逐行 JSON 传输，异步 AgentSessionEvent 则复用同一 stdout 通道分派。
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
@@ -69,6 +70,7 @@ export class RpcClient {
 
 	/**
 	 * Start the RPC agent process.
+	 * 启动完成仅表示子进程仍存活且管道已连接，不代表模型请求已发生；后续命令错误仍按请求返回。
 	 */
 	async start(): Promise<void> {
 		if (this.process) {
@@ -98,12 +100,14 @@ export class RpcClient {
 		this.process = childProcess;
 
 		// Collect stderr for debugging
+		// stderr 不参与 JSONL 协议，同时保留副本并透传给父进程，便于为超时和退出错误补充诊断。
 		childProcess.stderr?.on("data", (data) => {
 			this.stderr += data.toString();
 			process.stderr.write(data);
 		});
 
 		childProcess.once("exit", (code, signal) => {
+			// 子进程终止后所有等待响应的请求都不可能完成，必须用同一个退出错误统一拒绝。
 			if (this.process !== childProcess) return;
 			const error = this.createProcessExitError(code, signal);
 			this.exitError = error;
@@ -124,11 +128,13 @@ export class RpcClient {
 		});
 
 		// Set up strict JSONL reader for stdout.
+		// reader 负责按换行恢复完整帧，避免一次 data 事件包含半条或多条 JSON 时破坏消息边界。
 		this.stopReadingStdout = attachJsonlLineReader(childProcess.stdout!, (line) => {
 			this.handleLine(line);
 		});
 
 		// Wait a moment for process to initialize
+		// 当前协议没有 ready 握手，因此用短暂存活检查尽早暴露 CLI 路径或启动参数错误。
 		await new Promise((resolve) => setTimeout(resolve, 100));
 
 		if (this.process.exitCode !== null) {
@@ -140,6 +146,7 @@ export class RpcClient {
 
 	/**
 	 * Stop the RPC agent process.
+	 * 先停止 stdout 解析并请求 SIGTERM；一秒内未退出则 SIGKILL，确保客户端生命周期不会无限等待。
 	 */
 	async stop(): Promise<void> {
 		if (!this.process) return;
@@ -149,6 +156,7 @@ export class RpcClient {
 		this.process.kill("SIGTERM");
 
 		// Wait for process to exit
+		// exit 监听器会先拒绝仍在 pendingRequests 中的调用，随后 stop 再清理本地引用。
 		await new Promise<void>((resolve) => {
 			const timeout = setTimeout(() => {
 				this.process?.kill("SIGKILL");
@@ -193,6 +201,7 @@ export class RpcClient {
 	 * Send a prompt to the agent.
 	 * Returns immediately after sending; use onEvent() to receive streaming events.
 	 * Use waitForIdle() to wait for completion.
+	 * prompt 的 RPC 响应只确认命令已被接受，生成内容和最终状态必须从事件流观察。
 	 */
 	async prompt(message: string, images?: ImageContent[]): Promise<void> {
 		await this.send({ type: "prompt", message, images });
@@ -443,6 +452,7 @@ export class RpcClient {
 	/**
 	 * Wait for agent to become idle (no streaming).
 	 * Resolves when agent_settled event is received.
+	 * agent_settled 比单次 assistant/message 结束更强，表示自动重试、压缩和排队续轮也已完成。
 	 */
 	waitForIdle(timeout = 60000): Promise<void> {
 		return new Promise((resolve, reject) => {
@@ -463,6 +473,7 @@ export class RpcClient {
 
 	/**
 	 * Collect events until agent becomes idle.
+	 * 订阅在完成或超时时自动移除；返回顺序与 stdout 上收到的事件顺序一致。
 	 */
 	collectEvents(timeout = 60000): Promise<AgentSessionEvent[]> {
 		return new Promise((resolve, reject) => {
@@ -485,6 +496,7 @@ export class RpcClient {
 
 	/**
 	 * Send prompt and wait for completion, returning all events.
+	 * 必须先建立事件订阅再发送 prompt，避免快速响应在监听器注册前丢失。
 	 */
 	async promptAndWait(message: string, images?: ImageContent[], timeout = 60000): Promise<AgentSessionEvent[]> {
 		const eventsPromise = this.collectEvents(timeout);
@@ -501,6 +513,7 @@ export class RpcClient {
 			const data = JSON.parse(line);
 
 			// Check if it's a response to a pending request
+			// response 由 id 精确关联并只结算一次；匹配后立即从 pending map 删除。
 			if (data.type === "response" && data.id && this.pendingRequests.has(data.id)) {
 				const pending = this.pendingRequests.get(data.id)!;
 				this.pendingRequests.delete(data.id);
@@ -509,11 +522,13 @@ export class RpcClient {
 			}
 
 			// Otherwise it's an event
+			// 未匹配为当前请求响应的 JSON 帧按会话事件广播，监听器按注册顺序同步调用。
 			for (const listener of this.eventListeners) {
 				listener(data as AgentSessionEvent);
 			}
 		} catch {
 			// Ignore non-JSON lines
+			// stdout 偶发诊断文本不应破坏后续 JSONL 帧；严格行边界允许逐行隔离解析失败。
 		}
 	}
 
@@ -522,6 +537,7 @@ export class RpcClient {
 	}
 
 	private rejectPendingRequests(error: Error): void {
+		// 复制同一终止原因到全部请求后清空映射，避免进程错误留下永不结算的 Promise。
 		for (const pending of this.pendingRequests.values()) {
 			pending.reject(error);
 		}
@@ -549,15 +565,18 @@ export class RpcClient {
 		}
 
 		const id = `req_${++this.requestId}`;
+		// 单客户端递增 id 足以关联乱序响应；协议不依赖命令按发送顺序完成。
 		const fullCommand = { ...command, id } as RpcCommand;
 
 		return new Promise((resolve, reject) => {
 			const timeout = setTimeout(() => {
+				// 请求级超时只移除自身关联，不终止子进程或影响其他并发命令。
 				this.pendingRequests.delete(id);
 				reject(new Error(`Timeout waiting for response to ${command.type}. Stderr: ${this.stderr}`));
 			}, 30000);
 
 			this.pendingRequests.set(id, {
+				// 在写入前登记 pending，防止极快响应先于关联表建立。
 				resolve: (response) => {
 					clearTimeout(timeout);
 					resolve(response);
@@ -569,6 +588,7 @@ export class RpcClient {
 			});
 
 			try {
+				// serializeJsonLine 保证每条命令恰好占一行，与子进程的逐行读取协议对应。
 				stdin.write(serializeJsonLine(fullCommand));
 			} catch (error: unknown) {
 				const writeError = error instanceof Error ? error : new Error(String(error));
@@ -586,6 +606,7 @@ export class RpcClient {
 		}
 		// Type assertion: we trust response.data matches T based on the command sent.
 		// This is safe because each public method specifies the correct T for its command.
+		// 运行时只验证 success 分支；data 形状由协议定义与对应公开方法的泛型约定共同保证。
 		const successResponse = response as Extract<RpcResponse, { success: true; data: unknown }>;
 		return successResponse.data as T;
 	}

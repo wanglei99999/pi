@@ -3,6 +3,7 @@
  *
  * Commands are sent as JSON lines on stdin.
  * Responses and events are emitted as JSON lines on stdout.
+ * 每个 JSONL 帧必须可独立序列化；命令响应通过可选 id 关联，AgentSessionEvent 则作为无关联的异步事件穿插输出。
  */
 
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -15,10 +16,12 @@ import type { SourceInfo } from "../../core/source-info.ts";
 
 // ============================================================================
 // RPC Commands (stdin)
+// type 是判别字段，决定该命令允许携带的参数以及对应成功响应的 data 形状。
 // ============================================================================
 
 export type RpcCommand =
 	// Prompting
+	// prompt 只确认 preflight/入队成功，生成进度与最终内容通过事件流传递。
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
 	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "follow_up"; message: string; images?: ImageContent[] }
@@ -54,6 +57,7 @@ export type RpcCommand =
 	| { id?: string; type: "abort_bash" }
 
 	// Session
+	// 会话替换类命令可被扩展取消，因此成功响应仍显式返回 cancelled 状态。
 	| { id?: string; type: "get_session_stats" }
 	| { id?: string; type: "export_html"; outputPath?: string }
 	| { id?: string; type: "switch_session"; sessionPath: string }
@@ -75,7 +79,10 @@ export type RpcCommand =
 // RPC Slash Command (for get_commands response)
 // ============================================================================
 
-/** A command available for invocation via prompt */
+/**
+ * A command available for invocation via prompt
+ * 该结构只包含可跨 JSON 边界展示和调用的元数据，不携带扩展 handler 或资源对象引用。
+ */
 export interface RpcSlashCommand {
 	/** Command name (without leading slash) */
 	name: string;
@@ -92,6 +99,7 @@ export interface RpcSlashCommand {
 // ============================================================================
 
 export interface RpcSessionState {
+	// 这是查询时点的可序列化快照；后续流式状态变化仍需监听事件或再次 get_state。
 	model?: Model<any>;
 	thinkingLevel: ThinkingLevel;
 	isStreaming: boolean;
@@ -111,8 +119,10 @@ export interface RpcSessionState {
 // ============================================================================
 
 // Success responses with data
+// command 与 success 共同构成判别条件，使客户端可按原命令安全收窄 data 类型。
 export type RpcResponse =
 	// Prompting (async - events follow)
+	// 此处成功仅代表命令接受，不能替代 agent_settled 等生命周期事件。
 	| { id?: string; type: "response"; command: "prompt"; success: true }
 	| { id?: string; type: "response"; command: "steer"; success: true }
 	| { id?: string; type: "response"; command: "follow_up"; success: true }
@@ -220,13 +230,17 @@ export type RpcResponse =
 	  }
 
 	// Error response (any command can fail)
+	// 失败分支使用宽泛 command string，也覆盖解析失败或未来客户端发送的未知命令。
 	| { id?: string; type: "response"; command: string; success: false; error: string };
 
 // ============================================================================
 // Extension UI Events (stdout)
 // ============================================================================
 
-/** Emitted when an extension needs user input */
+/**
+ * Emitted when an extension needs user input
+ * 请求 id 属于扩展 UI 关联空间；仅纯数据 UI 能力可跨进程桥接，组件工厂和同步 getter 不在协议内。
+ */
 export type RpcExtensionUIRequest =
 	| { type: "extension_ui_request"; id: string; method: "select"; title: string; options: string[]; timeout?: number }
 	| { type: "extension_ui_request"; id: string; method: "confirm"; title: string; message: string; timeout?: number }
@@ -251,6 +265,7 @@ export type RpcExtensionUIRequest =
 			id: string;
 			method: "setStatus";
 			statusKey: string;
+			// undefined 在对象序列化时可能省略该字段，接收端需把缺失解释为清除状态。
 			statusText: string | undefined;
 	  }
 	| {
@@ -258,6 +273,7 @@ export type RpcExtensionUIRequest =
 			id: string;
 			method: "setWidget";
 			widgetKey: string;
+			// widgetLines 缺失表示移除 widget；RPC 不传递不可序列化的组件实例。
 			widgetLines: string[] | undefined;
 			widgetPlacement?: "aboveEditor" | "belowEditor";
 	  }
@@ -268,7 +284,10 @@ export type RpcExtensionUIRequest =
 // Extension UI Commands (stdin)
 // ============================================================================
 
-/** Response to an extension UI request */
+/**
+ * Response to an extension UI request
+ * value、confirmed 与 cancelled 是互斥结果，必须原样回传请求 id 才能完成对应等待中的扩展 Promise。
+ */
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
@@ -276,6 +295,7 @@ export type RpcExtensionUIResponse =
 
 // ============================================================================
 // Helper type for extracting command types
+// 从联合类型派生命令字面量集合，避免在调度器或客户端重复维护协议值列表。
 // ============================================================================
 
 export type RpcCommandType = RpcCommand["type"];

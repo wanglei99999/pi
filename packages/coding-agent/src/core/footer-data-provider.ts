@@ -12,6 +12,7 @@ type GitPaths = {
 /**
  * Find git metadata paths by walking up from cwd.
  * Handles both regular git repos (.git is a directory) and worktrees (.git is a file).
+ * 从 cwd 向上查找 Git 元数据，同时解析普通仓库目录和 worktree 的 gitdir/commondir 间接路径。
  */
 function findGitPaths(cwd: string): GitPaths | null {
 	let dir = cwd;
@@ -47,7 +48,10 @@ function findGitPaths(cwd: string): GitPaths | null {
 	}
 }
 
-/** Ask git for the current branch. Returns null on detached HEAD or if git is unavailable. */
+/**
+ * Ask git for the current branch. Returns null on detached HEAD or if git is unavailable.
+ * 同步调用 git 仅作为 HEAD 内容无法直接解析时的回退；detached HEAD 或命令不可用返回 null。
+ */
 function resolveBranchWithGitSync(repoDir: string): string | null {
 	const result = spawnSync("git", ["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"], {
 		cwd: repoDir,
@@ -58,7 +62,10 @@ function resolveBranchWithGitSync(repoDir: string): string | null {
 	return branch || null;
 }
 
-/** Ask git for the current branch asynchronously. Returns null on detached HEAD or if git is unavailable. */
+/**
+ * Ask git for the current branch asynchronously. Returns null on detached HEAD or if git is unavailable.
+ * 异步回退用于文件监听刷新路径，避免阻塞 TUI 渲染循环。
+ */
 function resolveBranchWithGitAsync(repoDir: string): Promise<string | null> {
 	return new Promise((resolvePromise) => {
 		execFile(
@@ -95,6 +102,7 @@ function shouldPollGitHead(repoDir: string): boolean {
 /**
  * Provides git branch and extension statuses - data not otherwise accessible to extensions.
  * Token stats, model info available via ctx.sessionManager and ctx.model.
+ * 向页脚和扩展提供 Git 分支、扩展状态及可用 provider 数；令牌和模型信息仍由会话上下文负责。
  */
 export class FooterDataProvider {
 	private cwd: string;
@@ -123,7 +131,10 @@ export class FooterDataProvider {
 		this.setupGitWatcher();
 	}
 
-	/** Current git branch, null if not in repo, "detached" if detached HEAD */
+	/**
+	 * Current git branch, null if not in repo, "detached" if detached HEAD
+	 * 首次读取时同步解析并缓存，后续由文件监听异步刷新。
+	 */
 	getGitBranch(): string | null {
 		if (this.cachedBranch === undefined) {
 			this.cachedBranch = this.resolveGitBranchSync();
@@ -136,7 +147,10 @@ export class FooterDataProvider {
 		return this.extensionStatuses;
 	}
 
-	/** Subscribe to git branch changes. Returns unsubscribe function. */
+	/**
+	 * Subscribe to git branch changes. Returns unsubscribe function.
+	 * 注册分支变化回调并返回幂等取消订阅函数。
+	 */
 	onBranchChange(callback: () => void): () => void {
 		this.branchChangeCallbacks.add(callback);
 		return () => this.branchChangeCallbacks.delete(callback);
@@ -183,7 +197,10 @@ export class FooterDataProvider {
 		this.notifyBranchChange();
 	}
 
-	/** Internal: cleanup */
+	/**
+	 * Internal: cleanup
+	 * 停止所有 watcher、轮询和延迟任务，并清空订阅者。
+	 */
 	dispose(): void {
 		this.disposed = true;
 		if (this.refreshTimer) {
@@ -313,6 +330,7 @@ export class FooterDataProvider {
 		// Watch the directory containing HEAD, not HEAD itself.
 		// Git uses atomic writes (write temp, rename over HEAD), which changes the inode.
 		// fs.watch on a file stops working after the inode changes.
+		// 监听 HEAD 所在目录而不是文件本身，以兼容 Git 原子 rename 导致 inode 替换的写入方式。
 		this.headWatcher = watchWithErrorHandler(
 			dirname(this.gitPaths.headPath),
 			(_eventType, filename) => {
@@ -341,6 +359,7 @@ export class FooterDataProvider {
 
 		// In reftable repos, branch switches update files in the reftable directory
 		// instead of HEAD. Watch it separately so the footer picks up those changes.
+		// reftable 仓库的分支切换可能不修改 HEAD，因此还需监听共享 reftable 目录和 tables.list。
 		const reftableDir = join(this.gitPaths.commonGitDir, "reftable");
 		if (existsSync(reftableDir)) {
 			this.reftableWatcher = watchWithErrorHandler(
@@ -381,7 +400,10 @@ export class FooterDataProvider {
 	}
 }
 
-/** Read-only view for extensions - excludes setExtensionStatus, setAvailableProviderCount and dispose */
+/**
+ * Read-only view for extensions - excludes setExtensionStatus, setAvailableProviderCount and dispose
+ * 扩展只获得查询与订阅能力，不能直接修改全局 provider 计数或销毁宿主数据源。
+ */
 export type ReadonlyFooterDataProvider = Pick<
 	FooterDataProvider,
 	"getGitBranch" | "getExtensionStatuses" | "getAvailableProviderCount" | "onBranchChange"

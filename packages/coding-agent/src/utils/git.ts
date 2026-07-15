@@ -2,6 +2,7 @@ import hostedGitInfo from "hosted-git-info";
 
 /**
  * Parsed git URL information.
+ * 规范化后的 git 来源信息，供安装和更新逻辑统一使用。
  */
 export type GitSource = {
 	/** Always "git" for git sources */
@@ -19,6 +20,7 @@ export type GitSource = {
 };
 
 function splitRef(url: string): { repo: string; ref?: string } {
+	// ref 使用尾部 `@` 分隔，但 SCP 风格地址本身也含 `@`，因此只在仓库路径部分查找。
 	const scpLikeMatch = url.match(/^git@([^:]+):(.+)$/);
 	if (scpLikeMatch) {
 		const pathWithMaybeRef = scpLikeMatch[2] ?? "";
@@ -82,6 +84,7 @@ function decodeForValidation(value: string): string | null {
 }
 
 function hasUnsafeGitInstallPart(value: string, allowSlash: boolean): boolean {
+	// 同时检查原文与 percent-decoding 后的值，防止编码绕过路径穿越和绝对路径限制。
 	const decoded = decodeForValidation(value);
 	if (decoded === null) {
 		return true;
@@ -106,6 +109,7 @@ function buildGitSource(args: { repo: string; host: string; path: string; ref?: 
 		return null;
 	}
 	const normalizedPath = args.path.replace(/\.git$/, "").replace(/^\/+/, "");
+	// 安装源必须至少包含 owner/repo 两段，且 host/path 都不能逃逸目标安装目录。
 	if (!args.host || !normalizedPath || normalizedPath.split("/").length < 2) {
 		return null;
 	}
@@ -168,6 +172,7 @@ function parseGenericGitUrl(url: string): GitSource | null {
  * Rules:
  * - With git: prefix, accept all historical shorthand forms.
  * - Without git: prefix, only accept explicit protocol URLs.
+ * 规则：带 git: 前缀时兼容历史简写；无前缀时只接受显式协议 URL，避免把普通包名误判为仓库。
  */
 export function parseGitUrl(source: string): GitSource | null {
 	const trimmed = source.trim();
@@ -184,6 +189,7 @@ export function parseGitUrl(source: string): GitSource | null {
 		(value): value is string => Boolean(value),
 	);
 	for (const candidate of hostedCandidates) {
+		// 优先让 hosted-git-info 识别常见托管平台，保留其 committish 解析能力。
 		const info = hostedGitInfo.fromUrl(candidate);
 		if (info) {
 			if (split.ref && info.project?.includes("@")) {
@@ -208,6 +214,7 @@ export function parseGitUrl(source: string): GitSource | null {
 		(value): value is string => Boolean(value),
 	);
 	for (const candidate of httpsCandidates) {
+		// 历史简写缺少协议时补上 HTTPS 再尝试，但最终仍经过统一安全校验。
 		const info = hostedGitInfo.fromUrl(candidate);
 		if (info) {
 			if (split.ref && info.project?.includes("@")) {
@@ -222,5 +229,6 @@ export function parseGitUrl(source: string): GitSource | null {
 		}
 	}
 
+	// 非已知托管平台最后走通用解析，支持自建 Git 服务与 localhost。
 	return parseGenericGitUrl(url);
 }

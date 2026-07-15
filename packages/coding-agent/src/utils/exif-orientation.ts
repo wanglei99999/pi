@@ -3,6 +3,7 @@ import type { PhotonImageType } from "./photon.ts";
 type Photon = typeof import("@silvia-odwyer/photon-node");
 
 function readOrientationFromTiff(bytes: Uint8Array, tiffStart: number): number {
+	// 截断或格式异常的 EXIF 一律按 orientation=1 处理，避免元数据解析影响图片解码主流程。
 	if (tiffStart + 8 > bytes.length) return 1;
 
 	const byteOrder = (bytes[tiffStart] << 8) | bytes[tiffStart + 1];
@@ -28,6 +29,7 @@ function readOrientationFromTiff(bytes: Uint8Array, tiffStart: number): number {
 		if (entryPos + 12 > bytes.length) return 1;
 
 		if (read16(entryPos) === 0x0112) {
+			// 仅接受 EXIF orientation 定义的 1..8，未知值回退为不变换。
 			const value = read16(entryPos + 8);
 			return value >= 1 && value <= 8 ? value : 1;
 		}
@@ -73,11 +75,13 @@ function findWebpTiffOffset(bytes: Uint8Array): number {
 		if (chunkId === "EXIF") {
 			if (dataStart + chunkSize > bytes.length) return -1;
 			// Some WebP files have "Exif\0\0" prefix before the TIFF header
+			// 部分 WebP 文件会在 TIFF header 前带有 "Exif\0\0" 前缀。
 			const tiffStart = chunkSize >= 6 && hasExifHeader(bytes, dataStart) ? dataStart + 6 : dataStart;
 			return tiffStart;
 		}
 
 		// RIFF chunks are padded to even size
+		// RIFF chunk 会填充到偶数字节边界，步进时必须计入该填充字节。
 		offset = dataStart + chunkSize + (chunkSize % 2);
 	}
 
@@ -99,10 +103,12 @@ function getExifOrientation(bytes: Uint8Array): number {
 	let tiffOffset = -1;
 
 	// JPEG: starts with FF D8
+	// JPEG 以 FF D8 起始。
 	if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) {
 		tiffOffset = findJpegTiffOffset(bytes);
 	}
 	// WebP: starts with RIFF....WEBP
+	// WebP 以 RIFF....WEBP 起始。
 	else if (
 		bytes.length >= 12 &&
 		bytes[0] === 0x52 &&
@@ -129,6 +135,7 @@ function rotate90(photon: Photon, image: PhotonImageType, dstIndex: DstIndexFn):
 	const src = image.get_raw_pixels();
 	const dst = new Uint8Array(src.length);
 
+	// 按完整 RGBA 像素重排索引；旋转 90 度后输出宽高需要交换。
 	for (let y = 0; y < h; y++) {
 		for (let x = 0; x < w; x++) {
 			const srcIdx = (y * w + x) * 4;
@@ -144,6 +151,7 @@ function rotate90(photon: Photon, image: PhotonImageType, dstIndex: DstIndexFn):
 }
 
 // Flip orientations mutate in-place. Rotations return a new image (caller must free the old one if different).
+// 翻转方向会原地修改；旋转会返回新图片，调用方必须在对象不同时释放旧图片。
 export function applyExifOrientation(
 	photon: Photon,
 	image: PhotonImageType,

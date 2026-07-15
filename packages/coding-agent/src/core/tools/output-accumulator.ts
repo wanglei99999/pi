@@ -31,6 +31,8 @@ function byteLength(text: string): number {
  * Appends decode chunks with a streaming UTF-8 decoder, keeps only a decoded
  * tail for display snapshots, and opens a temp file when the full output needs
  * to be preserved.
+ * 以流式 UTF-8 解码器增量接收输出，在内存中仅保留用于展示的尾部；需要保留完整输出时写入临时文件。
+ * 这样可限制长时间运行命令的内存占用，同时保持快照中的行数和字节统计准确。
  */
 export class OutputAccumulator {
 	private readonly maxLines: number;
@@ -69,6 +71,7 @@ export class OutputAccumulator {
 		this.totalRawBytes += data.length;
 		this.appendDecodedText(this.decoder.decode(data, { stream: true }));
 
+		// 一旦超过展示限制就切换到临时文件；切换前积累的原始字节也会补写进去。
 		if (this.tempFileStream || this.shouldUseTempFile()) {
 			this.ensureTempFile();
 			this.tempFileStream?.write(data);
@@ -89,6 +92,7 @@ export class OutputAccumulator {
 	}
 
 	snapshot(options: { persistIfTruncated?: boolean } = {}): OutputSnapshot {
+		// 快照只截取滚动尾部，但总行数和总字节数来自完整流的累计统计。
 		const tailTruncation = truncateTail(this.getSnapshotText(), {
 			maxLines: this.maxLines,
 			maxBytes: this.maxBytes,
@@ -184,6 +188,7 @@ export class OutputAccumulator {
 		}
 
 		let start = buffer.length - this.maxRollingBytes;
+		// 向前跳过 UTF-8 continuation bytes，确保截断点不会落在多字节字符中间。
 		while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) {
 			start++;
 		}
@@ -199,6 +204,7 @@ export class OutputAccumulator {
 		}
 
 		const firstNewline = this.tailText.indexOf("\n");
+		// 滚动裁剪若落在一行中间，则丢弃该残缺首行，避免展示误导性的片段。
 		return firstNewline === -1 ? this.tailText : this.tailText.slice(firstNewline + 1);
 	}
 

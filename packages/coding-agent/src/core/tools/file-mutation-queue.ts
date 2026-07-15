@@ -28,6 +28,8 @@ async function getMutationQueueKey(filePath: string): Promise<string> {
 /**
  * Serialize file mutation operations targeting the same file.
  * Operations for different files still run in parallel.
+ * 将针对同一文件的修改操作串行化。
+ * 针对不同文件的操作仍可并行执行。
  */
 export async function withFileMutationQueue<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
 	const registration = registrationQueue.then(async () => {

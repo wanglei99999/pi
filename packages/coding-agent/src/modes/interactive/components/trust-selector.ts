@@ -19,6 +19,8 @@ export interface TrustSelectorOptions {
 }
 
 function formatDecision(trustPath: string | undefined, decision: ProjectTrustStoreEntry | null): string {
+	// Distinguish an exact saved decision from one inherited through an ancestor trust path.
+	// 区分当前路径的直接保存决策与从祖先信任路径继承的决策。
 	if (decision === null) {
 		return "none";
 	}
@@ -42,6 +44,8 @@ export class TrustSelectorComponent extends Container {
 
 		this.savedDecision = options.savedDecision;
 		this.trustOptions = getProjectTrustOptions(options.cwd);
+		// Preselect the exact persisted choice; inherited or missing decisions fall back to the first safe option.
+		// 预选完全匹配的持久化选项；继承或缺失决策时回退到首个安全选项。
 		this.selectedIndex = Math.max(
 			0,
 			this.trustOptions.findIndex((option) => this.isSavedOption(option)),
@@ -90,6 +94,8 @@ export class TrustSelectorComponent extends Container {
 	}
 
 	private isSavedOption(option: ProjectTrustOption): boolean {
+		// Matching both decision and storage path prevents an inherited choice from looking directly saved here.
+		// 同时匹配决策和存储路径，避免把继承选项误显示为当前路径直接保存。
 		return (
 			option.savedPath !== undefined &&
 			this.savedDecision?.decision === option.trusted &&
@@ -98,6 +104,8 @@ export class TrustSelectorComponent extends Container {
 	}
 
 	private updateList(): void {
+		// Rebuild only the option list so the surrounding explanation and key hints remain stable.
+		// 只重建选项列表，使周围说明和快捷键提示保持稳定。
 		this.listContainer.clear();
 		for (let i = 0; i < this.trustOptions.length; i++) {
 			const option = this.trustOptions[i];
@@ -123,6 +131,8 @@ export class TrustSelectorComponent extends Container {
 			this.selectedIndex = Math.min(this.trustOptions.length - 1, this.selectedIndex + 1);
 			this.updateList();
 		} else if (kb.matches(keyData, "tui.select.confirm") || keyData === "\n") {
+			// Return the trust effect and persistence updates; the owner performs storage and session reloading.
+			// 仅返回信任效果和持久化更新，上层负责写入存储并重载会话。
 			const selected = this.trustOptions[this.selectedIndex];
 			if (selected) {
 				this.onSelectCallback({ trusted: selected.trusted, updates: selected.updates });

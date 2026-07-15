@@ -18,11 +18,14 @@ import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.ts"
 
 // ============================================================================
 // Types & Schema
+// 类型与 schema
 // ============================================================================
 
 const ColorValueSchema = Type.Union([
 	Type.String(), // hex "#ff0000", var ref "primary", or empty ""
+	// 字符串可以是十六进制颜色、变量引用或空值。
 	Type.Integer({ minimum: 0, maximum: 255 }), // 256-color index
+	// 整数直接表示 0 到 255 的终端调色板索引。
 ]);
 
 type ColorValue = Static<typeof ColorValueSchema>;
@@ -33,6 +36,7 @@ const ThemeJsonSchema = Type.Object({
 	vars: Type.Optional(Type.Record(Type.String(), ColorValueSchema)),
 	colors: Type.Object({
 		// Core UI (10 colors)
+		// 核心界面颜色。
 		accent: ColorValueSchema,
 		border: ColorValueSchema,
 		borderAccent: ColorValueSchema,
@@ -45,6 +49,7 @@ const ThemeJsonSchema = Type.Object({
 		text: ColorValueSchema,
 		thinkingText: ColorValueSchema,
 		// Backgrounds & Content Text (11 colors)
+		// 背景和内容文本颜色。
 		selectedBg: ColorValueSchema,
 		userMessageBg: ColorValueSchema,
 		userMessageText: ColorValueSchema,
@@ -57,6 +62,7 @@ const ThemeJsonSchema = Type.Object({
 		toolTitle: ColorValueSchema,
 		toolOutput: ColorValueSchema,
 		// Markdown (10 colors)
+		// Markdown 语义元素颜色。
 		mdHeading: ColorValueSchema,
 		mdLink: ColorValueSchema,
 		mdLinkUrl: ColorValueSchema,
@@ -68,10 +74,12 @@ const ThemeJsonSchema = Type.Object({
 		mdHr: ColorValueSchema,
 		mdListBullet: ColorValueSchema,
 		// Tool Diffs (3 colors)
+		// 工具差异显示颜色。
 		toolDiffAdded: ColorValueSchema,
 		toolDiffRemoved: ColorValueSchema,
 		toolDiffContext: ColorValueSchema,
 		// Syntax Highlighting (9 colors)
+		// 语法高亮 token 颜色。
 		syntaxComment: ColorValueSchema,
 		syntaxKeyword: ColorValueSchema,
 		syntaxFunction: ColorValueSchema,
@@ -82,6 +90,7 @@ const ThemeJsonSchema = Type.Object({
 		syntaxOperator: ColorValueSchema,
 		syntaxPunctuation: ColorValueSchema,
 		// Thinking Level Borders (6 colors)
+		// 不同思考等级的边框颜色。
 		thinkingOff: ColorValueSchema,
 		thinkingMinimal: ColorValueSchema,
 		thinkingLow: ColorValueSchema,
@@ -89,6 +98,7 @@ const ThemeJsonSchema = Type.Object({
 		thinkingHigh: ColorValueSchema,
 		thinkingXhigh: ColorValueSchema,
 		// Bash Mode (1 color)
+		// Bash 模式边框颜色。
 		bashMode: ColorValueSchema,
 	}),
 	export: Type.Optional(
@@ -163,6 +173,7 @@ type ColorMode = "truecolor" | "256color";
 
 // ============================================================================
 // Color Utilities
+// 颜色工具
 // ============================================================================
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
@@ -180,9 +191,11 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
 }
 
 // The 6x6x6 color cube channel values (indices 0-5)
+// 256 色模式的 6x6x6 色立方通道值。
 const CUBE_VALUES = [0, 95, 135, 175, 215, 255];
 
 // Grayscale ramp values (indices 232-255, 24 grays from 8 to 238)
+// 256 色索引 232-255 对应的 24 级灰阶。
 const GRAY_VALUES = Array.from({ length: 24 }, (_, i) => 8 + i * 10);
 
 function findClosestCubeIndex(value: number): number {
@@ -213,6 +226,7 @@ function findClosestGrayIndex(gray: number): number {
 
 function colorDistance(r1: number, g1: number, b1: number, r2: number, g2: number, b2: number): number {
 	// Weighted Euclidean distance (human eye is more sensitive to green)
+	// 使用感知加权欧氏距离，人眼对绿色差异更敏感。
 	const dr = r1 - r2;
 	const dg = g1 - g2;
 	const db = b1 - b2;
@@ -221,6 +235,7 @@ function colorDistance(r1: number, g1: number, b1: number, r2: number, g2: numbe
 
 function rgbTo256(r: number, g: number, b: number): number {
 	// Find closest color in the 6x6x6 cube
+	// 先寻找色立方中的最近颜色。
 	const rIdx = findClosestCubeIndex(r);
 	const gIdx = findClosestCubeIndex(g);
 	const bIdx = findClosestCubeIndex(b);
@@ -231,6 +246,7 @@ function rgbTo256(r: number, g: number, b: number): number {
 	const cubeDist = colorDistance(r, g, b, cubeR, cubeG, cubeB);
 
 	// Find closest grayscale
+	// 同时计算最近灰阶候选。
 	const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
 	const grayIdx = findClosestGrayIndex(gray);
 	const grayValue = GRAY_VALUES[grayIdx];
@@ -239,12 +255,14 @@ function rgbTo256(r: number, g: number, b: number): number {
 
 	// Check if color has noticeable saturation (hue matters)
 	// If max-min spread is significant, prefer cube to preserve tint
+	// 通道差较大时说明色相明显，优先色立方以保留色调。
 	const maxC = Math.max(r, g, b);
 	const minC = Math.min(r, g, b);
 	const spread = maxC - minC;
 
 	// Only consider grayscale if color is nearly neutral (spread < 10)
 	// AND grayscale is actually closer
+	// 只有近中性色且灰阶距离更小时才使用灰阶索引。
 	if (spread < 10 && grayDist < cubeDist) {
 		return grayIndex;
 	}
@@ -292,6 +310,7 @@ function resolveVarRefs(
 	vars: Record<string, ColorValue>,
 	visited = new Set<string>(),
 ): string | number {
+	// 递归解析主题变量引用，并通过 visited 检测循环依赖。
 	if (typeof value === "number" || value === "" || value.startsWith("#")) {
 		return value;
 	}
@@ -318,6 +337,7 @@ function resolveThemeColors<T extends Record<string, ColorValue>>(
 
 // ============================================================================
 // Theme Class
+// 主题类
 // ============================================================================
 
 export class Theme {
@@ -351,12 +371,14 @@ export class Theme {
 	fg(color: ThemeColor, text: string): string {
 		const ansi = this.fgColors.get(color);
 		if (!ansi) throw new Error(`Unknown theme color: ${color}`);
+		// 只重置前景色，避免破坏外围背景样式。
 		return `${ansi}${text}\x1b[39m`; // Reset only foreground color
 	}
 
 	bg(color: ThemeBg, text: string): string {
 		const ansi = this.bgColors.get(color);
 		if (!ansi) throw new Error(`Unknown theme background color: ${color}`);
+		// 只重置背景色，保留外围前景和文本装饰。
 		return `${ansi}${text}\x1b[49m`; // Reset only background color
 	}
 
@@ -398,6 +420,7 @@ export class Theme {
 
 	getThinkingBorderColor(level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"): (str: string) => string {
 		// Map thinking levels to dedicated theme colors
+		// 将思考等级映射到各自独立的主题色 token。
 		switch (level) {
 			case "off":
 				return (str: string) => this.fg("thinkingOff", str);
@@ -423,12 +446,14 @@ export class Theme {
 
 // ============================================================================
 // Theme Loading
+// 主题加载
 // ============================================================================
 
 let BUILTIN_THEMES: Record<string, ThemeJson> | undefined;
 
 function getBuiltinThemes(): Record<string, ThemeJson> {
 	if (!BUILTIN_THEMES) {
+		// 内置主题按需读取一次并缓存，避免每次列举或切换重复访问磁盘。
 		const themesDir = getThemesDir();
 		const darkPath = path.join(themesDir, "dark.json");
 		const lightPath = path.join(themesDir, "light.json");
@@ -462,11 +487,13 @@ export function getAvailableThemesWithPaths(): ThemeInfo[] {
 	};
 
 	// Built-in themes
+	// 先加入内置主题。
 	for (const name of Object.keys(getBuiltinThemes())) {
 		addTheme({ name, path: path.join(themesDir, `${name}.json`) });
 	}
 
 	// Custom themes
+	// 再加入用户自定义主题，重名项由 seen 去重。
 	for (const themeInfo of getCustomThemeInfos()) {
 		addTheme(themeInfo);
 	}
@@ -498,6 +525,7 @@ function getCustomThemeInfos(): ThemeInfo[] {
 		} catch {
 			// Invalid themes are ignored here; the resource loader reports them
 			// during normal startup/reload.
+			// 此处仅用于列表发现，非法主题留给正常资源加载或热重载流程报告。
 		}
 	}
 	return result;
@@ -512,6 +540,7 @@ function assertThemeNameIsValid(name: string): void {
 }
 
 function parseThemeJson(label: string, json: unknown): ThemeJson {
+	// 通过编译后的 TypeBox schema 校验主题，并把缺失颜色 token 汇总为更可操作的错误信息。
 	if (!validateThemeJson.Check(json)) {
 		const errors = Array.from(validateThemeJson.Errors(json));
 		const missingColors = new Set<string>();
@@ -585,6 +614,7 @@ function loadThemeJson(name: string): ThemeJson {
 }
 
 function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string): Theme {
+	// 未显式指定时依据终端 trueColor 能力选择真彩或 256 色降级模式。
 	const colorMode = mode ?? (getCapabilities().trueColor ? "truecolor" : "256color");
 	const resolvedColors = resolveThemeColors(themeJson.colors, themeJson.vars);
 	const fgColors: Record<ThemeColor, string | number> = {} as Record<ThemeColor, string | number>;
@@ -598,6 +628,7 @@ function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string
 		"toolErrorBg",
 	]);
 	for (const [key, value] of Object.entries(resolvedColors)) {
+		// 背景 token 与前景 token 分开编译为 ANSI 映射。
 		if (bgColorKeys.has(key)) {
 			bgColors[key as ThemeBg] = value;
 		} else {
@@ -747,6 +778,7 @@ export async function detectTerminalBackgroundTheme({
 	timeoutMs,
 	env,
 }: TerminalBackgroundThemeDetectionOptions): Promise<TerminalThemeDetection> {
+	// 优先通过 OSC 11 查询真实背景色，失败或超时后回退到 COLORFGBG 环境提示。
 	try {
 		const rgb = await ui.queryTerminalBackgroundColor({ timeoutMs });
 		if (rgb) {
@@ -759,6 +791,7 @@ export async function detectTerminalBackgroundTheme({
 		}
 	} catch {
 		// Fall back to environment-based detection when the terminal query fails.
+		// 终端查询异常时使用环境变量探测。
 	}
 
 	return detectTerminalBackgroundFromEnv({ env });
@@ -774,6 +807,7 @@ export async function detectTerminalThemeForAuto({
 		if (colorScheme) return colorScheme;
 	} catch {
 		// Fall back to OSC 11 / COLORFGBG detection when color-scheme DSR is unsupported.
+		// 不支持配色方案 DSR 时回退到 OSC 11，再回退到 COLORFGBG。
 	}
 	return (await detectTerminalBackgroundTheme({ ui, timeoutMs, env })).theme;
 }
@@ -784,14 +818,17 @@ export function getDefaultTheme(): string {
 
 // ============================================================================
 // Global Theme Instance
+// 全局主题实例
 // ============================================================================
 
 // Use globalThis to share theme across module loaders (tsx + jiti in dev mode)
+// 使用 globalThis 让开发模式中的 tsx、jiti 等不同模块加载器共享同一主题实例。
 const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
 const THEME_KEY_OLD = Symbol.for("@mariozechner/pi-coding-agent:theme");
 
 // Export theme as a getter that reads from globalThis
 // This ensures all module instances (tsx, jiti) see the same theme
+// Proxy 每次访问都读取全局实例，避免不同模块副本持有过期主题引用。
 export const theme: Theme = new Proxy({} as Theme, {
 	get(_target, prop) {
 		const t = (globalThis as Record<symbol, Theme>)[THEME_KEY];
@@ -831,9 +868,11 @@ export function initTheme(themeName?: string, enableWatcher: boolean = false): v
 		}
 	} catch (_error) {
 		// Theme is invalid - fall back to dark theme silently
+		// 初始化主题无效时静默回退到内置 dark。
 		currentThemeName = "dark";
 		setGlobalTheme(loadTheme("dark"));
 		// Don't start watcher for fallback theme
+		// 回退主题不启动原请求主题的文件监听。
 	}
 }
 
@@ -850,9 +889,11 @@ export function setTheme(name: string, enableWatcher: boolean = false): { succes
 		return { success: true };
 	} catch (error) {
 		// Theme is invalid - fall back to dark theme
+		// 运行时切换失败同样回退 dark，但将错误返回给调用方。
 		currentThemeName = "dark";
 		setGlobalTheme(loadTheme("dark"));
 		// Don't start watcher for fallback theme
+		// 回退后不继续监听无效主题文件。
 		return {
 			success: false,
 			error: error instanceof Error ? error.message : String(error),
@@ -864,6 +905,7 @@ export function setThemeInstance(themeInstance: Theme): void {
 	setGlobalTheme(themeInstance);
 	currentThemeName = "<in-memory>";
 	stopThemeWatcher(); // Can't watch a direct instance
+	// 内存主题没有可监听的源文件，因此停止文件 watcher。
 	if (onThemeChangeCallback) {
 		onThemeChangeCallback();
 	}
@@ -877,6 +919,7 @@ function startThemeWatcher(): void {
 	stopThemeWatcher();
 
 	// Only watch if it's a custom theme (not built-in)
+	// 内置主题不会在运行时修改，只监听自定义主题文件。
 	if (!currentThemeName || currentThemeName === "dark" || currentThemeName === "light") {
 		return;
 	}
@@ -887,6 +930,7 @@ function startThemeWatcher(): void {
 	const themeFile = path.join(customThemesDir, watchedFileName);
 
 	// Only watch if the file exists
+	// 无对应文件时不创建目录 watcher。
 	if (!fs.existsSync(themeFile)) {
 		return;
 	}
@@ -899,26 +943,31 @@ function startThemeWatcher(): void {
 			themeReloadTimer = undefined;
 
 			// Ignore stale timers after switching themes or stopping the watcher
+			// 主题已切换时忽略旧 watcher 安排的延迟任务。
 			if (currentThemeName !== watchedThemeName) {
 				return;
 			}
 
 			// Keep the last successfully loaded theme active if the file is temporarily missing
+			// 编辑器原子保存期间文件可能短暂消失，此时保留最近成功主题。
 			if (!fs.existsSync(themeFile)) {
 				return;
 			}
 
 			try {
 				// Reload the theme from disk and refresh the registry cache
+				// 从磁盘重新解析主题并同步注册缓存和全局实例。
 				const reloadedTheme = loadThemeFromPath(themeFile);
 				registeredThemes.set(watchedThemeName, reloadedTheme);
 				setGlobalTheme(reloadedTheme);
 				// Notify callback (to invalidate UI)
+				// 通知 UI 使组件缓存失效并重绘。
 				if (onThemeChangeCallback) {
 					onThemeChangeCallback();
 				}
 			} catch (_error) {
 				// Ignore errors (file might be in invalid state while being edited)
+				// 文件编辑中的临时非法状态不替换当前可用主题。
 			}
 		}, 100);
 	};
@@ -957,6 +1006,7 @@ export function stopThemeWatcher(): void {
 
 // ============================================================================
 // HTML Export Helpers
+// HTML 导出辅助
 // ============================================================================
 
 /**
@@ -965,8 +1015,10 @@ export function stopThemeWatcher(): void {
  * Indices 16-231: 6x6x6 color cube
  * Indices 232-255: grayscale ramp
  */
+/** 将 256 色索引换算为近似 CSS 十六进制颜色。 */
 function ansi256ToHex(index: number): string {
 	// Basic colors (0-15) - approximate common terminal values
+	// 基础 16 色没有统一 RGB，这里采用常见终端近似值。
 	const basicColors = [
 		"#000000",
 		"#800000",
@@ -990,6 +1042,7 @@ function ansi256ToHex(index: number): string {
 	}
 
 	// Color cube (16-231): 6x6x6 = 216 colors
+	// 索引 16-231 映射到 6x6x6 色立方。
 	if (index < 232) {
 		const cubeIndex = index - 16;
 		const r = Math.floor(cubeIndex / 36);
@@ -1000,6 +1053,7 @@ function ansi256ToHex(index: number): string {
 	}
 
 	// Grayscale (232-255): 24 shades
+	// 索引 232-255 映射到 24 级灰阶。
 	const gray = 8 + (index - 232) * 10;
 	const grayHex = gray.toString(16).padStart(2, "0");
 	return `#${grayHex}${grayHex}${grayHex}`;
@@ -1009,6 +1063,7 @@ function ansi256ToHex(index: number): string {
  * Get resolved theme colors as CSS-compatible hex strings.
  * Used by HTML export to generate CSS custom properties.
  */
+/** 获取解析变量后的 CSS 十六进制主题颜色，供 HTML 导出生成自定义属性。 */
 export function getResolvedThemeColors(themeName?: string): Record<string, string> {
 	const name = themeName ?? currentThemeName ?? getDefaultTheme();
 	const isLight = name === "light";
@@ -1016,6 +1071,7 @@ export function getResolvedThemeColors(themeName?: string): Record<string, strin
 	const resolved = resolveThemeColors(themeJson.colors, themeJson.vars);
 
 	// Default text color for empty values (terminal uses default fg color)
+	// 终端空颜色表示默认前景色；HTML 导出需按深浅主题提供明确回退值。
 	const defaultText = isLight ? "#000000" : "#e5e5e7";
 
 	const cssColors: Record<string, string> = {};
@@ -1024,6 +1080,7 @@ export function getResolvedThemeColors(themeName?: string): Record<string, strin
 			cssColors[key] = ansi256ToHex(value);
 		} else if (value === "") {
 			// Empty means default terminal color - use sensible fallback for HTML
+			// 空值在 HTML 中替换为可见的默认文本色。
 			cssColors[key] = defaultText;
 		} else {
 			cssColors[key] = value;
@@ -1035,8 +1092,10 @@ export function getResolvedThemeColors(themeName?: string): Record<string, strin
 /**
  * Check if a theme is a "light" theme (for CSS that needs light/dark variants).
  */
+/** 判断主题是否使用浅色 HTML 变体。 */
 export function isLightTheme(themeName?: string): boolean {
 	// Currently just check the name - could be extended to analyze colors
+	// 当前仅按名称判断，未来可扩展为分析实际颜色亮度。
 	return themeName === "light";
 }
 
@@ -1044,6 +1103,7 @@ export function isLightTheme(themeName?: string): boolean {
  * Get explicit export colors from theme JSON, if specified.
  * Returns undefined for each color that isn't explicitly set.
  */
+/** 读取主题显式声明的 HTML 导出背景色，未设置的字段保持 undefined。 */
 export function getThemeExportColors(themeName?: string): {
 	pageBg?: string;
 	cardBg?: string;
@@ -1076,6 +1136,7 @@ export function getThemeExportColors(themeName?: string): {
 
 // ============================================================================
 // TUI Helpers
+// TUI 辅助
 // ============================================================================
 
 type CliHighlightTheme = Record<string, (s: string) => string>;
@@ -1115,6 +1176,7 @@ function buildCliHighlightTheme(t: Theme): CliHighlightTheme {
 
 function getCliHighlightTheme(t: Theme): CliHighlightTheme {
 	if (cachedHighlightThemeFor !== t || !cachedCliHighlightTheme) {
+		// 高亮器主题按 Theme 实例缓存，切换全局主题后自动重建映射。
 		cachedHighlightThemeFor = t;
 		cachedCliHighlightTheme = buildCliHighlightTheme(t);
 	}
@@ -1125,12 +1187,15 @@ function getCliHighlightTheme(t: Theme): CliHighlightTheme {
  * Highlight code with syntax coloring based on file extension or language.
  * Returns array of highlighted lines.
  */
+/** 根据语言标识执行终端语法高亮，并返回逐行 ANSI 文本。 */
 export function highlightCode(code: string, lang?: string): string[] {
 	// Validate language before highlighting to avoid stderr spam from cli-highlight
+	// 先验证语言支持，避免 cli-highlight 为未知语言输出 stderr 噪声。
 	const validLang = lang && supportsLanguage(lang) ? lang : undefined;
 	// Skip highlighting when no valid language is specified. cli-highlight's
 	// auto-detection is unreliable and can misidentify prose as AppleScript,
 	// LiveCodeServer, etc., coloring random English words as keywords.
+	// 禁用不可靠的自动探测，避免把普通文本误识别为编程语言并随机着色。
 	if (!validLang) {
 		return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
 	}
@@ -1149,6 +1214,7 @@ export function highlightCode(code: string, lang?: string): string[] {
 /**
  * Get language identifier from file path extension.
  */
+/** 根据文件扩展名返回语法高亮器使用的语言标识。 */
 export function getLanguageFromPath(filePath: string): string | undefined {
 	const ext = filePath.split(".").pop()?.toLowerCase();
 	if (!ext) return undefined;
@@ -1235,10 +1301,12 @@ export function getMarkdownTheme(): MarkdownTheme {
 		strikethrough: (text: string) => chalk.strikethrough(text),
 		highlightCode: (code: string, lang?: string): string[] => {
 			// Validate language before highlighting to avoid stderr spam from cli-highlight
+			// Markdown 代码块同样先验证语言支持。
 			const validLang = lang && supportsLanguage(lang) ? lang : undefined;
 			// Skip highlighting when no valid language is specified. cli-highlight's
 			// auto-detection is unreliable and can misidentify prose as AppleScript,
 			// LiveCodeServer, etc., coloring random English words as keywords.
+			// 未指定有效语言时使用统一代码块颜色，不启用自动语言探测。
 			if (!validLang) {
 				return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
 			}

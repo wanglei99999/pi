@@ -1,3 +1,5 @@
+// Keep built-in provider labels centralized so selectors and diagnostics use consistent branding.
+// 集中维护内置 provider 标签，使选择器和诊断信息使用一致的品牌名称。
 export const BUILT_IN_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
 	anthropic: "Anthropic",
 	"amazon-bedrock": "Amazon Bedrock",

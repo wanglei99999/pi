@@ -1,5 +1,6 @@
 /**
  * One-time migrations that run on startup.
+ * 启动时执行的一次性兼容迁移，尽量以跳过单项失败的方式保护用户现有配置。
  */
 
 import chalk from "chalk";
@@ -17,6 +18,7 @@ const EXTENSIONS_DOC_URL =
  * Migrate legacy oauth.json and settings.json apiKeys to auth.json.
  *
  * @returns Array of provider names that were migrated
+ * 将旧 oauth.json 和 settings.json.apiKeys 合并到新的 auth.json；auth.json 已存在时不覆盖用户数据。
  */
 export function migrateAuthToAuthJson(): string[] {
 	const agentDir = getAgentDir();
@@ -25,12 +27,14 @@ export function migrateAuthToAuthJson(): string[] {
 	const settingsPath = join(agentDir, "settings.json");
 
 	// Skip if auth.json already exists
+	// 新格式文件存在即视为迁移已完成，避免覆盖后续修改。
 	if (existsSync(authPath)) return [];
 
 	const migrated: Record<string, unknown> = {};
 	const providers: string[] = [];
 
 	// Migrate oauth.json
+	// OAuth 凭证迁移成功后重命名旧文件，保留可恢复副本。
 	if (existsSync(oauthPath)) {
 		try {
 			const oauth = JSON.parse(readFileSync(oauthPath, "utf-8"));
@@ -41,10 +45,12 @@ export function migrateAuthToAuthJson(): string[] {
 			renameSync(oauthPath, `${oauthPath}.migrated`);
 		} catch {
 			// Skip on error
+			// 单个旧文件损坏时跳过该来源，不阻止其他迁移。
 		}
 	}
 
 	// Migrate settings.json apiKeys
+	// API Key 只补充尚未由 OAuth 数据占用的提供商，并从旧 settings 中移除成功迁移的字段。
 	if (existsSync(settingsPath)) {
 		try {
 			const content = readFileSync(settingsPath, "utf-8");
@@ -61,6 +67,7 @@ export function migrateAuthToAuthJson(): string[] {
 			}
 		} catch {
 			// Skip on error
+			// 无法解析或写回设置时保持原文件，不中断启动。
 		}
 	}
 
@@ -80,11 +87,14 @@ export function migrateAuthToAuthJson(): string[] {
  * to the correct location based on the cwd in their session header.
  *
  * See: https://github.com/earendil-works/pi-mono/issues/320
+ *
+ * 修复 v0.30.0 会话误写到 agent 根目录的问题：读取 JSONL 首行中的 cwd，按 SessionManager 相同规则重建目录并移动文件。
  */
 export function migrateSessionsFromAgentRoot(): void {
 	const agentDir = getAgentDir();
 
 	// Find all .jsonl files directly in agentDir (not in subdirectories)
+	// 只检查 agentDir 根部的 JSONL，避免重复扫描已经位于正确会话目录的文件。
 	let files: string[];
 	try {
 		files = readdirSync(agentDir)
@@ -99,6 +109,7 @@ export function migrateSessionsFromAgentRoot(): void {
 	for (const file of files) {
 		try {
 			// Read first line to get session header
+			// 仅需首行 session header 即可确定目标 cwd。
 			const content = readFileSync(file, "utf8");
 			const firstLine = content.split("\n")[0];
 			if (!firstLine?.trim()) continue;
@@ -109,15 +120,18 @@ export function migrateSessionsFromAgentRoot(): void {
 			const cwd: string = header.cwd;
 
 			// Compute the correct session directory (same encoding as session-manager.ts)
+			// 路径编码必须与 session-manager.ts 保持一致，才能被后续会话发现逻辑识别。
 			const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 			const correctDir = join(agentDir, "sessions", safePath);
 
 			// Create directory if needed
+			// 目标项目目录按需创建。
 			if (!existsSync(correctDir)) {
 				mkdirSync(correctDir, { recursive: true });
 			}
 
 			// Move the file
+			// 目标文件已存在时保留两边，避免覆盖潜在有效会话。
 			const fileName = file.split("/").pop() || file.split("\\").pop();
 			const newPath = join(correctDir, fileName!);
 
@@ -126,6 +140,7 @@ export function migrateSessionsFromAgentRoot(): void {
 			renameSync(file, newPath);
 		} catch {
 			// Skip files that can't be migrated
+			// 单个无法解析或移动的会话不影响其他文件迁移。
 		}
 	}
 }
@@ -133,6 +148,7 @@ export function migrateSessionsFromAgentRoot(): void {
 /**
  * Migrate commands/ to prompts/ if needed.
  * Works for both regular directories and symlinks.
+ * 当 prompts/ 尚不存在时把旧 commands/ 原子重命名为 prompts/，普通目录和符号链接均适用。
  */
 function migrateCommandsToPrompts(baseDir: string, label: string): boolean {
 	const commandsDir = join(baseDir, "commands");
@@ -168,11 +184,13 @@ function migrateKeybindingsConfigFile(): void {
 		writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
 	} catch {
 		// Ignore malformed files during migration
+		// 损坏的 keybindings.json 保持原样，避免迁移阶段进一步破坏配置。
 	}
 }
 
 /**
  * Move fd/rg binaries from tools/ to bin/ if they exist.
+ * 将历史版本放在 tools/ 的托管 fd/rg 二进制迁移到专用 bin/ 目录。
  */
 function migrateToolsToBin(): void {
 	const agentDir = getAgentDir();
@@ -198,13 +216,16 @@ function migrateToolsToBin(): void {
 					movedAny = true;
 				} catch {
 					// Ignore errors
+					// 单个二进制移动失败不阻止启动或其他文件迁移。
 				}
 			} else {
 				// Target exists, just delete the old one
+				// 新位置已有文件时删除旧副本，避免重复占用和误发现。
 				try {
 					rmSync?.(oldPath, { force: true });
 				} catch {
 					// Ignore
+					// 清理失败保留旧文件，不影响已存在的新二进制。
 				}
 			}
 		}
@@ -218,6 +239,7 @@ function migrateToolsToBin(): void {
 /**
  * Check for deprecated hooks/ and tools/ directories.
  * Note: tools/ may contain fd/rg binaries extracted by pi, so only warn if it has other files.
+ * 检查旧扩展目录；tools/ 中只有托管 fd/rg 时不警告，存在自定义内容才提示迁移到 extensions/。
  */
 function checkDeprecatedExtensionDirs(baseDir: string, label: string): string[] {
 	const hooksDir = join(baseDir, "hooks");
@@ -230,6 +252,7 @@ function checkDeprecatedExtensionDirs(baseDir: string, label: string): string[] 
 
 	if (existsSync(toolsDir)) {
 		// Check if tools/ contains anything other than fd/rg (which are auto-extracted binaries)
+		// 隐藏文件和应用自动提取的二进制不视为用户自定义工具。
 		try {
 			const entries = readdirSync(toolsDir);
 			const customTools = entries.filter((e) => {
@@ -245,6 +268,7 @@ function checkDeprecatedExtensionDirs(baseDir: string, label: string): string[] 
 			}
 		} catch {
 			// Ignore read errors
+			// 目录不可读时不生成可能误导的弃用警告。
 		}
 	}
 
@@ -253,16 +277,19 @@ function checkDeprecatedExtensionDirs(baseDir: string, label: string): string[] 
 
 /**
  * Run extension system migrations (commands→prompts) and collect warnings about deprecated directories.
+ * 同时处理用户级和项目级扩展目录迁移，并汇总弃用警告供启动 UI 展示。
  */
 function migrateExtensionSystem(cwd: string): string[] {
 	const agentDir = getAgentDir();
 	const projectDir = join(cwd, CONFIG_DIR_NAME);
 
 	// Migrate commands/ to prompts/
+	// 先迁移目录名称，再检查剩余弃用结构。
 	migrateCommandsToPrompts(agentDir, "Global");
 	migrateCommandsToPrompts(projectDir, "Project");
 
 	// Check for deprecated directories
+	// 用户级与项目级警告统一返回，由调用方决定交互展示。
 	const warnings = [
 		...checkDeprecatedExtensionDirs(agentDir, "Global"),
 		...checkDeprecatedExtensionDirs(projectDir, "Project"),
@@ -273,6 +300,7 @@ function migrateExtensionSystem(cwd: string): string[] {
 
 /**
  * Print deprecation warnings and wait for keypress.
+ * 输出弃用提示后等待用户确认，临时切换 raw mode 并在按键后恢复 stdin 状态。
  */
 export async function showDeprecationWarnings(warnings: string[]): Promise<void> {
 	if (warnings.length === 0) return;
@@ -301,6 +329,7 @@ export async function showDeprecationWarnings(warnings: string[]): Promise<void>
  * Run all migrations. Called once on startup.
  *
  * @returns Object with migration results and deprecation warnings
+ * 按安全顺序执行全部启动迁移；可自动完成的变更立即处理，需要用户行动的项目以警告返回。
  */
 export function runMigrations(cwd: string): {
 	migratedAuthProviders: string[];

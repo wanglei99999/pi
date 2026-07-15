@@ -46,12 +46,16 @@ export interface GrepToolDetails {
 
 /**
  * Pluggable operations for the grep tool.
+ * grep 工具可替换的文件系统操作接口。
  * Override these to delegate search to remote systems (for example SSH).
+ * 可覆盖这些操作以配合 SSH 等远程后端读取路径和上下文内容；实际搜索仍由 ripgrep 执行。
  */
 export interface GrepOperations {
 	/** Check if path is a directory. Throws if path does not exist. */
+	/** 判断路径是否为目录；路径不存在时应抛错。 */
 	isDirectory: (absolutePath: string) => Promise<boolean> | boolean;
 	/** Read file contents for context lines */
+	/** 读取文件正文，仅用于补充匹配前后的上下文行。 */
 	readFile: (absolutePath: string) => Promise<string> | string;
 }
 
@@ -62,6 +66,7 @@ const defaultGrepOperations: GrepOperations = {
 
 export interface GrepToolOptions {
 	/** Custom operations for grep. Default: local filesystem plus ripgrep */
+	/** 自定义 grep 文件操作；默认组合本地文件系统与 ripgrep。 */
 	operations?: GrepOperations;
 }
 
@@ -95,6 +100,7 @@ function formatGrepResult(
 	showImages: boolean,
 ): string {
 	const output = getTextOutput(result, showImages).trim();
+	// 折叠态最多展示 15 行只是 TUI 视图限制，不改变工具返回内容或 details 中的截断信息。
 	let text = "";
 	if (output) {
 		const lines = output.split("\n");
@@ -169,12 +175,14 @@ export function createGrepToolDefinition(
 
 				(async () => {
 					try {
+						// ensureTool 依次复用托管缓存或系统 rg，必要时下载；不可用时不退回平台 grep，以保持参数和输出一致。
 						const rgPath = await ensureTool("rg", true);
 						if (!rgPath) {
 							settle(() => reject(new Error("ripgrep (rg) is not available and could not be downloaded")));
 							return;
 						}
 
+						// 路径相对 cwd 解析并支持绝对路径；此工具不额外限制搜索目标必须位于 cwd 内。
 						const searchPath = resolveToCwd(searchDir || ".", cwd);
 						const ops = customOps ?? defaultGrepOperations;
 						let isDirectory: boolean;
@@ -186,11 +194,13 @@ export function createGrepToolDefinition(
 						}
 
 						const contextValue = context && context > 0 ? context : 0;
+						// 非正 context 归零，limit 至少为 1，避免生成无意义的 ripgrep 调用。
 						const effectiveLimit = Math.max(1, limit ?? DEFAULT_LIMIT);
 						const formatPath = (filePath: string): string => {
 							if (isDirectory) {
 								const relative = path.relative(searchPath, filePath);
 								if (relative && !relative.startsWith("..")) {
+									// 目录搜索输出相对路径，并统一为 /，使 Windows 与 Unix 的结果格式一致。
 									return relative.replace(/\\/g, "/");
 								}
 							}
@@ -198,6 +208,7 @@ export function createGrepToolDefinition(
 						};
 
 						const fileCache = new Map<string, string[]>();
+						// 同一文件的上下文只读取一次，并统一 CRLF/CR 为 LF 后按一基行号索引。
 						const getFileLines = async (filePath: string): Promise<string[]> => {
 							let lines = fileCache.get(filePath);
 							if (!lines) {
@@ -213,6 +224,7 @@ export function createGrepToolDefinition(
 						};
 
 						const args: string[] = ["--json", "--line-number", "--color=never", "--hidden"];
+						// JSON 事件避免解析平台相关的展示文本；--hidden 包含隐藏项但仍遵守 ignore 规则，-- 终止选项解析。
 						if (ignoreCase) args.push("--ignore-case");
 						if (literal) args.push("--fixed-strings");
 						if (glob) args.push("--glob", glob);
@@ -239,6 +251,7 @@ export function createGrepToolDefinition(
 							}
 						};
 						const onAbort = () => {
+							// 取消通过终止子进程生效，最终只由 close/error 路径结算 Promise，避免重复完成。
 							aborted = true;
 							stopChild();
 						};
@@ -259,6 +272,7 @@ export function createGrepToolDefinition(
 								const sanitized = lineText.replace(/\r/g, "");
 								const isMatchLine = current === lineNumber;
 								// Truncate long lines so grep output stays compact.
+								// 截断超长单行以控制 grep 输出体积；details 会记录该降级，提示改用 read 查看全文。
 								const { text: truncatedText, wasTruncated } = truncateLine(sanitized);
 								if (wasTruncated) linesTruncated = true;
 								if (isMatchLine) block.push(`${relativePath}:${current}: ${truncatedText}`);
@@ -268,6 +282,7 @@ export function createGrepToolDefinition(
 						};
 
 						// Collect matches during streaming, then format them after rg exits.
+						// 流式阶段只收集结构化匹配并尽早执行数量上限，rg 退出后再异步读取和格式化上下文。
 						const matches: Array<{ filePath: string; lineNumber: number; lineText?: string }> = [];
 						rl.on("line", (line) => {
 							if (!line.trim() || matchCount >= effectiveLimit) return;
@@ -302,6 +317,7 @@ export function createGrepToolDefinition(
 								return;
 							}
 							if (!killedDueToLimit && code !== 0 && code !== 1) {
+								// ripgrep 的退出码 1 表示没有匹配，不是执行错误；达到 limit 主动终止也按正常结果处理。
 								const errorMsg = stderr.trim() || `ripgrep exited with code ${code}`;
 								settle(() => reject(new Error(errorMsg)));
 								return;
@@ -314,6 +330,7 @@ export function createGrepToolDefinition(
 							}
 
 							// Format matches after streaming finishes so custom readFile() backends can be async.
+							// 等流结束后格式化，允许自定义 readFile() 后端异步获取上下文；无 context 时直接使用 rg 事件文本。
 							for (const match of matches) {
 								if (contextValue === 0 && match.lineText !== undefined) {
 									const relativePath = formatPath(match.filePath);
@@ -332,10 +349,12 @@ export function createGrepToolDefinition(
 
 							const rawOutput = outputLines.join("\n");
 							// Apply byte truncation. There is no line limit here because the match limit already capped rows.
+							// 最终只执行字节上限截断；匹配数已限制结果规模，因此不再叠加独立行数上限。
 							const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 							let output = truncation.content;
 							const details: GrepToolDetails = {};
 							// Build actionable notices for truncation and match limits.
+							// 为匹配数、总字节和单行三种独立限制生成可操作提示，并同步写入结构化 details。
 							const notices: string[] = [];
 							if (matchLimitReached) {
 								notices.push(

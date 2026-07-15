@@ -35,6 +35,8 @@ export class InteractiveThemeController {
 	}
 
 	async applyFromSettings(): Promise<void> {
+		// Resolve explicit and auto settings before probing the terminal; probing is only needed when settings do not decide.
+		// 先解析显式与 auto 设置；仅在设置无法决定主题时才探测终端。
 		const themeSetting = this.settingsManager.getThemeSetting();
 		const autoTheme = parseAutoThemeSetting(themeSetting);
 		if (autoTheme) {
@@ -53,6 +55,8 @@ export class InteractiveThemeController {
 		const detection = await detectTerminalBackgroundTheme({ ui: this.ui, timeoutMs: 100 });
 		this.terminalTheme = detection.theme;
 		if (!this.applyThemeName(detection.theme).success) return;
+		// Persist detection only when confidence is high; uncertain guesses remain session-local.
+		// 仅在探测置信度高时持久化；不确定的推断只在当前会话生效。
 		if (detection.confidence === "high") {
 			this.settingsManager.setTheme(detection.theme);
 			await this.settingsManager.flush();
@@ -73,6 +77,8 @@ export class InteractiveThemeController {
 	}
 
 	preview(themeSettingOrName: string): void {
+		// Preview swaps the rendered theme without changing settings or the committed active theme name.
+		// 预览只替换当前渲染主题，不修改设置，也不提交 activeThemeName。
 		const themeName = resolveThemeSetting(themeSettingOrName, this.terminalTheme) ?? this.activeThemeName;
 		if (!themeName) return;
 		if (setTheme(themeName, true).success) {
@@ -90,6 +96,8 @@ export class InteractiveThemeController {
 	}
 
 	private applyThemeName(themeName: string, showError = false): ThemeResult {
+		// setTheme owns the dark-theme fallback; the controller mirrors that resolved state and reports optionally.
+		// dark 主题回退由 setTheme 负责；控制器同步记录回退后的状态，并按需报告错误。
 		const result = setTheme(themeName, true);
 		this.activeThemeName = result.success ? themeName : "dark";
 		this.notifyChanged();
@@ -100,6 +108,8 @@ export class InteractiveThemeController {
 	}
 
 	private notifyChanged(): void {
+		// Invalidate component caches here; the host callback decides when to schedule the actual redraw.
+		// 此处只使组件缓存失效；实际重绘时机由宿主回调决定。
 		this.ui.invalidate();
 		this.onChanged();
 	}

@@ -15,11 +15,15 @@ const __dirname = dirname(__filename);
 /**
  * Detect if we're running as a Bun compiled binary.
  * Bun binaries have import.meta.url containing "$bunfs", "~BUN", or "%7EBUN" (Bun's virtual filesystem path)
+ * 通过 import.meta.url 中的 Bun 虚拟文件系统标记判断当前是否为编译后的独立二进制。
  */
 export const isBunBinary =
 	import.meta.url.includes("$bunfs") || import.meta.url.includes("~BUN") || import.meta.url.includes("%7EBUN");
 
-/** Detect if Bun is the runtime (compiled binary or bun run) */
+/**
+ * Detect if Bun is the runtime (compiled binary or bun run)
+ * 判断运行时是否为 Bun，包括独立二进制和 bun run 两种形式。
+ */
 export const isBunRuntime = !!process.versions.bun;
 
 // =============================================================================
@@ -109,6 +113,7 @@ function getInferredNpmInstall(): { root: string; prefix: string } | undefined {
 	// Windows global npm prefixes use `<prefix>\\node_modules`, which is
 	// indistinguishable from local project installs by path shape alone. Do not
 	// infer unsupported Windows custom prefixes without `npm root -g` evidence.
+	// Windows 的全局与本地 node_modules 仅凭路径形态无法可靠区分，因此没有 npm root -g 证据时不猜测自定义前缀。
 	return undefined;
 }
 
@@ -363,9 +368,13 @@ export function getUpdateInstruction(packageName: string): string {
  * - For Bun binary: returns the directory containing the executable
  * - For Node.js (dist/): returns __dirname (the dist/ directory)
  * - For tsx (src/): returns parent directory (the package root)
+ *
+ * 根据 Bun 二进制、已构建 Node 包或源码运行模式确定资源根目录；PI_PACKAGE_DIR 可覆盖自动探测，
+ * 主要用于 Nix/Guix 等特殊安装布局。
  */
 export function getPackageDir(): string {
 	// Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
+	// 特殊包管理器的存储路径可能难以自动识别，允许通过环境变量显式指定。
 	const envDir = process.env.PI_PACKAGE_DIR;
 	if (envDir) {
 		return normalizePath(envDir);
@@ -373,9 +382,11 @@ export function getPackageDir(): string {
 
 	if (isBunBinary) {
 		// Bun binary: process.execPath points to the compiled executable
+		// Bun 独立二进制的资源与可执行文件并列放置。
 		return dirname(process.execPath);
 	}
 	// Node.js: walk up from __dirname until we find package.json
+	// Node.js/tsx 模式向上查找 package.json，以同时兼容 src 与 dist 入口深度。
 	let dir = __dirname;
 	while (dir !== dirname(dir)) {
 		if (existsSync(join(dir, "package.json"))) {
@@ -384,6 +395,7 @@ export function getPackageDir(): string {
 		dir = dirname(dir);
 	}
 	// Fallback (shouldn't happen)
+	// 找不到包清单时保守返回模块目录，正常发布布局不应进入该分支。
 	return __dirname;
 }
 
@@ -392,12 +404,14 @@ export function getPackageDir(): string {
  * - For Bun binary: theme/ next to executable
  * - For Node.js (dist/): dist/modes/interactive/theme/
  * - For tsx (src/): src/modes/interactive/theme/
+ * 根据运行形态定位随包发布的内置主题目录。
  */
 export function getThemesDir(): string {
 	if (isBunBinary) {
 		return join(getPackageDir(), "theme");
 	}
 	// Theme is in modes/interactive/theme/ relative to src/ or dist/
+	// 源码与构建产物目录结构一致，只需选择 src 或 dist 根。
 	const packageDir = getPackageDir();
 	const srcOrDist = existsSync(join(packageDir, "src")) ? "src" : "dist";
 	return join(packageDir, srcOrDist, "modes", "interactive", "theme");
@@ -408,6 +422,7 @@ export function getThemesDir(): string {
  * - For Bun binary: export-html/ next to executable
  * - For Node.js (dist/): dist/core/export-html/
  * - For tsx (src/): src/core/export-html/
+ * 根据运行形态定位随包发布的 HTML 导出模板。
  */
 export function getExportTemplateDir(): string {
 	if (isBunBinary) {
@@ -448,6 +463,7 @@ export function getChangelogPath(): string {
  * - For Bun binary: assets/ next to executable
  * - For Node.js (dist/): dist/modes/interactive/assets/
  * - For tsx (src/): src/modes/interactive/assets/
+ * 根据运行形态定位内置交互资源目录。
  */
 export function getInteractiveAssetsDir(): string {
 	if (isBunBinary) {
@@ -492,6 +508,7 @@ export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";
 export const VERSION: string = pkg.version || "0.0.0";
 
 // e.g., PI_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
+// 环境变量前缀随 APP_NAME 变化，支持重新品牌化的发行包使用独立配置目录。
 export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`;
 export const ENV_SESSION_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_SESSION_DIR`;
 
@@ -511,7 +528,10 @@ export function getShareViewerUrl(gistId: string): string {
 // User Config Paths (~/.pi/agent/*)
 // =============================================================================
 
-/** Get the agent config directory (e.g., ~/.pi/agent/) */
+/**
+ * Get the agent config directory (e.g., ~/.pi/agent/)
+ * 返回用户级代理配置根目录，环境变量覆盖默认的 ~/.pi/agent 布局。
+ */
 export function getAgentDir(): string {
 	const envDir = process.env[ENV_AGENT_DIR];
 	if (envDir) {

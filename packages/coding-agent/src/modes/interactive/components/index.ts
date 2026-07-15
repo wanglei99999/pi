@@ -1,4 +1,5 @@
 // UI Components for extensions
+// 扩展可复用的 UI 组件公共入口，避免依赖交互模式内部目录结构。
 export { ArminComponent } from "./armin.ts";
 export { AssistantMessageComponent } from "./assistant-message.ts";
 export { BashExecutionComponent } from "./bash-execution.ts";

@@ -1,6 +1,8 @@
 /**
  * Central timing instrumentation for startup profiling.
  * Enable with PI_TIMING=1 environment variable.
+ * 启动性能分析的集中计时工具；通过 PI_TIMING=1 启用。
+ * 不启用时所有入口都会立即返回，避免对正常启动路径增加测量开销。
  */
 
 const ENABLED = process.env.PI_TIMING === "1";
@@ -23,6 +25,7 @@ export function time(label: string, namespace: TimingLabel = "main"): void {
 	const now = Date.now();
 
 	if (!timingNamespaces.has(namespace)) {
+		// 允许调用方不显式 reset；首次记录会自动建立该命名空间的基准时间。
 		resetTimings(namespace);
 	}
 
@@ -32,6 +35,7 @@ export function time(label: string, namespace: TimingLabel = "main"): void {
 }
 
 function printTimingGroup(title: string, timings: TimingNamespace["timings"]): void {
+	// 丢弃负值可隔离系统时钟回拨，避免污染汇总输出。
 	const printableTimings = timings.filter((timing) => timing.ms >= 0);
 	if (printableTimings.length === 0) return;
 	console.error(`\n--- ${title} ---`);

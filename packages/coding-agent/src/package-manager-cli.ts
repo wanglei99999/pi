@@ -183,6 +183,8 @@ Options:
 }
 
 function parsePackageCommand(args: string[]): PackageCommandOptions | undefined {
+	// Parse syntax separately from execution so invalid or conflicting targets cannot trigger mutations.
+	// 将命令语法解析与执行分离，确保无效或冲突的目标不会触发任何修改。
 	const [rawCommand, ...rest] = args;
 	let command: PackageCommand | undefined;
 	if (rawCommand === "uninstall") {
@@ -423,6 +425,8 @@ interface SelfUpdatePlan {
 }
 
 async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
+	// Resolve the exact published package and version before constructing an installation command.
+	// 在构造安装命令前先解析确切的已发布包与版本，避免更新阶段重新解释来源。
 	let latestRelease: Awaited<ReturnType<typeof getLatestPiRelease>>;
 	try {
 		latestRelease = await getLatestPiRelease(VERSION);
@@ -451,6 +455,8 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 }
 
 async function runSelfUpdate(command: SelfUpdateCommand): Promise<void> {
+	// Execute update steps sequentially and require every child process to exit successfully.
+	// 按顺序执行更新步骤，并要求每个子进程均成功退出后才继续。
 	console.log(chalk.dim(`Updating ${APP_NAME} with ${command.display}...`));
 	for (const step of command.steps ?? [command]) {
 		await new Promise<void>((resolve, reject) => {
@@ -509,6 +515,8 @@ async function createCommandSettingsManager(options: {
 	useSavedProjectTrustOnly?: boolean;
 	extensionFactories?: InlineExtension[];
 }): Promise<CommandSettingsResult> {
+	// Start with project resources disabled; enable them only after the explicit or saved trust decision is resolved.
+	// 初始禁用项目资源，仅在显式或已保存的信任决策解析完成后才启用。
 	const settingsManager = SettingsManager.create(options.cwd, options.agentDir, { projectTrusted: false });
 	const projectTrustWarnings: string[] = [];
 	const trustStore = new ProjectTrustStore(options.agentDir);
@@ -675,6 +683,8 @@ export async function handlePackageCommand(
 
 	const cwd = process.cwd();
 	const agentDir = getAgentDir();
+	// Only local install/remove operations write project package configuration and therefore require project trust.
+	// 只有本地 install/remove 会写入项目包配置，因此必须通过项目信任检查。
 	const writesProjectPackageConfig = (options.command === "install" || options.command === "remove") && options.local;
 	const { settingsManager, projectTrustWarnings } = await createCommandSettingsManager({
 		cwd,
@@ -701,6 +711,8 @@ export async function handlePackageCommand(
 	});
 
 	try {
+		// Install/remove delegate filesystem changes and matching settings persistence to one package-manager operation.
+		// install/remove 将文件系统变更与对应设置持久化交给同一个包管理器操作处理。
 		switch (options.command) {
 			case "install":
 				await packageManager.installAndPersist(source!, { local: options.local });
@@ -756,6 +768,8 @@ export async function handlePackageCommand(
 
 			case "update": {
 				const target = options.updateTarget ?? { type: "self" };
+				// Extension updates and self-update are independent phases; an "all" target deliberately runs both.
+				// 扩展更新与自身更新是独立阶段；"all" 目标会明确依次执行二者。
 				if (options.showExtensionsSkippedNote) {
 					console.log(
 						chalk.dim(`Extensions are skipped. Run ${APP_NAME} update --extensions to update extensions.`),

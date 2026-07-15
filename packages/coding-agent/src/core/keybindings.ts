@@ -56,11 +56,15 @@ export interface AppKeybindings {
 
 export type AppKeybinding = keyof AppKeybindings;
 
+// Extend the shared TUI registry so application actions remain type-safe and configurable.
+// 扩展共享 TUI 注册表，使应用级动作保持类型安全并可由用户配置。
 declare module "@earendil-works/pi-tui" {
 	interface Keybindings extends AppKeybindings {}
 }
 
 export const KEYBINDINGS = {
+	// Platform-sensitive defaults live in the registry instead of component-level key checks.
+	// 平台相关默认键位集中放在注册表中，避免组件直接硬编码按键判断。
 	...TUI_KEYBINDINGS,
 	"app.interrupt": { defaultKeys: "escape", description: "Cancel or abort" },
 	"app.clear": { defaultKeys: "ctrl+c", description: "Clear editor" },
@@ -202,6 +206,8 @@ export const KEYBINDINGS = {
 } as const satisfies KeybindingDefinitions;
 
 const KEYBINDING_NAME_MIGRATIONS = {
+	// Preserve old configuration names while converging persisted files on scoped action IDs.
+	// 兼容旧配置名称，同时将持久化配置收敛到带作用域的动作 ID。
 	cursorUp: "tui.editor.cursorUp",
 	cursorDown: "tui.editor.cursorDown",
 	cursorLeft: "tui.editor.cursorLeft",
@@ -268,6 +274,8 @@ function isLegacyKeybindingName(key: string): key is keyof typeof KEYBINDING_NAM
 }
 
 function toKeybindingsConfig(value: Record<string, unknown>): KeybindingsConfig {
+	// Ignore malformed values rather than letting one entry invalidate the complete keybinding file.
+	// 忽略格式错误的值，避免单个条目导致整个快捷键文件失效。
 	const config: KeybindingsConfig = {};
 	for (const [key, binding] of Object.entries(value)) {
 		if (typeof binding === "string") {
@@ -294,6 +302,8 @@ export function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): {
 			migrated = true;
 		}
 		if (key !== nextKey && Object.hasOwn(rawConfig, nextKey)) {
+			// An explicitly configured modern key wins over its migrated legacy alias.
+			// 新名称已显式配置时优先采用，跳过对应旧名称的迁移值。
 			migrated = true;
 			continue;
 		}
@@ -304,6 +314,8 @@ export function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): {
 }
 
 function orderKeybindingsConfig(config: Record<string, unknown>): Record<string, unknown> {
+	// Keep known actions in registry order and sort unknown extension keys for stable rewrites.
+	// 已知动作按注册表顺序排列，未知扩展键排序，以保证配置重写稳定。
 	const ordered: Record<string, unknown> = {};
 	for (const keybinding of Object.keys(KEYBINDINGS)) {
 		if (Object.hasOwn(config, keybinding)) {
@@ -328,6 +340,8 @@ function loadRawConfig(path: string): Record<string, unknown> | undefined {
 		if (typeof parsed !== "object" || parsed === null) return undefined;
 		return parsed as Record<string, unknown>;
 	} catch {
+		// Invalid or partially written JSON falls back to defaults; callers may repair it separately.
+		// 无效或尚未写完的 JSON 回退到默认值，文件修复由上层流程处理。
 		return undefined;
 	}
 }
@@ -347,6 +361,8 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 	}
 
 	reload(): void {
+		// Reload replaces only user bindings; definitions and default actions remain unchanged.
+		// 重载只替换用户绑定，动作定义与默认键位保持不变。
 		if (!this.configPath) return;
 		this.setUserBindings(KeybindingsManager.loadFromFile(this.configPath));
 	}

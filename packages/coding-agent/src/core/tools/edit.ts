@@ -70,6 +70,7 @@ export interface EditToolDetails {
 /**
  * Pluggable operations for the edit tool.
  * Override these to delegate file editing to remote systems (for example SSH).
+ * 自定义后端必须提供同一文件内容的原子读写视图；匹配、BOM/换行恢复和差异生成仍由工具层完成。
  */
 export interface EditOperations {
 	/** Read file contents as a Buffer */
@@ -99,6 +100,7 @@ function prepareEditArguments(input: unknown): EditToolInput {
 	const args = input as Record<string, unknown>;
 
 	// Some models (Opus 4.6, GLM-5.1) send edits as a JSON string instead of an array
+	// 该兼容步骤发生在 schema 校验前，只把可解析数组恢复为标准输入，不吞掉后续类型错误。
 	if (typeof args.edits === "string") {
 		try {
 			const parsed = JSON.parse(args.edits);
@@ -112,6 +114,7 @@ function prepareEditArguments(input: unknown): EditToolInput {
 	}
 
 	const edits = Array.isArray(legacy.edits) ? [...legacy.edits] : [];
+	// 旧版单替换字段追加到现有 edits，随后移除旧字段，统一进入多编辑执行路径。
 	edits.push({ oldText: legacy.oldText, newText: legacy.newText });
 	const { oldText: _oldText, newText: _newText, ...rest } = legacy;
 	return { ...rest, edits } as EditToolInput;
@@ -168,6 +171,7 @@ function getEditCallRenderComponent(state: EditRenderState, lastComponent: unkno
 }
 
 function getRenderablePreviewInput(args: RenderableEditArgs | undefined): { path: string; edits: Edit[] } | null {
+	// 流式参数尚未完整时不启动磁盘预览；只接受结构完整的标准或 legacy 单编辑输入。
 	if (!args) {
 		return null;
 	}
@@ -213,6 +217,7 @@ function formatEditResult(
 			.map((c) => c.text || "")
 			.join("\n");
 		if (!errorText || errorText === previewError) {
+			// 预览已经展示同一错误时不在结果区重复输出，保持调用卡片信息唯一。
 			return undefined;
 		}
 		return theme.fg("error", errorText);
@@ -220,6 +225,7 @@ function formatEditResult(
 
 	const resultDiff = result.details?.diff;
 	if (resultDiff && resultDiff !== previewDiff) {
+		// 文件可能在预览与排队执行之间变化，最终写入 diff 与预览不一致时必须展示权威结果。
 		return renderDiff(resultDiff, { filePath: rawPath ?? undefined });
 	}
 
@@ -271,6 +277,7 @@ function setEditPreview(
 ): boolean {
 	const current = component.preview;
 	const changed =
+		// 仅当错误/成功状态或实际 diff 内容变化时请求重建，避免异步预览造成无效重绘。
 		current === undefined ||
 		("error" in current && "error" in preview
 			? current.error !== preview.error
@@ -310,10 +317,12 @@ export function createEditToolDefinition(
 			const absolutePath = resolveToCwd(path, cwd);
 
 			return withFileMutationQueue(absolutePath, async () => {
+				// 同一路径的 edit/write 操作串行化，保证所有 oldText 都针对队列轮到本次时读到的单一原始版本。
 				// Do not reject from an abort event listener here: that would release the
 				// mutation queue while an in-flight filesystem operation may still finish.
 				// Checking signal.aborted after each await observes the same aborts while
 				// keeping the queue locked until the current operation has settled.
+				// 取消只在 await 边界检查，确保进行中的读写完成前不会释放队列让下一次修改并发进入。
 				const throwIfAborted = (): void => {
 					if (signal?.aborted) throw new Error("Operation aborted");
 				};
@@ -321,6 +330,7 @@ export function createEditToolDefinition(
 				throwIfAborted();
 
 				// Check if file exists.
+				// access 同时验证可读可写；错误在保留路径上下文后转换为稳定工具错误。
 				try {
 					await ops.access(absolutePath);
 				} catch (error: unknown) {
@@ -332,11 +342,13 @@ export function createEditToolDefinition(
 				throwIfAborted();
 
 				// Read the file.
+				// 每次执行只读取一次，所有 edits 都对该原始快照匹配，而不是按前一编辑结果增量匹配。
 				const buffer = await ops.readFile(absolutePath);
 				const rawContent = buffer.toString("utf-8");
 				throwIfAborted();
 
 				// Strip BOM before matching. The model will not include an invisible BOM in oldText.
+				// 先移除不可见 BOM 并统一为 LF 参与精确/规范化匹配，写回时再恢复原 BOM 和主导换行风格。
 				const { bom, text: content } = stripBom(rawContent);
 				const originalEnding = detectLineEnding(content);
 				const normalizedContent = normalizeToLF(content);
@@ -344,10 +356,12 @@ export function createEditToolDefinition(
 				throwIfAborted();
 
 				const finalContent = bom + restoreLineEndings(newContent, originalEnding);
+				// 写入内容只改变目标片段，文件级编码标记和 CRLF/LF 约定保持不变。
 				await ops.writeFile(absolutePath, finalContent);
 				throwIfAborted();
 
 				const diffResult = generateDiffString(baseContent, newContent);
+				// 展示 diff 与标准 unified patch 都基于 LF 规范化内容，避免平台换行制造整文件噪声。
 				const patch = generateUnifiedPatch(path, baseContent, newContent);
 				return {
 					content: [
@@ -368,6 +382,7 @@ export function createEditToolDefinition(
 				: undefined;
 
 			if (component.previewArgsKey !== argsKey) {
+				// 参数流变化时清除旧异步预览状态，防止上一组 edits 的结果短暂附着到新调用。
 				component.preview = undefined;
 				component.previewArgsKey = argsKey;
 				component.previewPending = false;
@@ -375,10 +390,12 @@ export function createEditToolDefinition(
 			}
 
 			if (context.argsComplete && previewInput && !component.preview && !component.previewPending) {
+				// 参数完整后异步读取当前文件计算预览；previewPending 保证同一参数只发起一次请求。
 				component.previewPending = true;
 				const requestKey = argsKey;
 				void computeEditsDiff(previewInput.path, previewInput.edits, context.cwd).then((preview) => {
 					if (component.previewArgsKey === requestKey) {
+						// 只有请求返回时参数 key 仍匹配才应用结果，隔离迟到预览的竞态。
 						setEditPreview(component, preview, requestKey);
 						context.invalidate();
 					}
@@ -398,6 +415,7 @@ export function createEditToolDefinition(
 			let changed = false;
 			if (callComponent) {
 				if (typeof resultDiff === "string") {
+					// 执行结果替换预览为最终 diff，使成功背景、导航行号和实际写入保持一致。
 					changed =
 						setEditPreview(
 							callComponent,

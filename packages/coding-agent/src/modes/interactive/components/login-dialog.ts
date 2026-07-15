@@ -8,6 +8,7 @@ import { keyHint } from "./keybinding-hints.ts";
 /**
  * Login dialog component - replaces editor during OAuth login flow
  */
+/** OAuth 登录期间替换主编辑器，按提供方事件动态展示授权、设备码、输入和进度状态。 */
 export class LoginDialogComponent extends Container implements Focusable {
 	private contentContainer: Container;
 	private input: Input;
@@ -18,6 +19,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 	private onComplete: (success: boolean, message?: string) => void;
 
 	// Focusable implementation - propagate to input for IME cursor positioning
+	// Focusable 状态转发给内部 Input，使手动输入时 IME 候选窗定位正确。
 	private _focused = false;
 	get focused(): boolean {
 		return this._focused;
@@ -43,16 +45,20 @@ export class LoginDialogComponent extends Container implements Focusable {
 		const title = titleOverride ?? `Login to ${providerName}`;
 
 		// Top border
+		// 登录对话框顶部边框。
 		this.addChild(new DynamicBorder());
 
 		// Title
+		// 标题可由调用方覆盖，否则使用 provider 显示名生成。
 		this.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
 
 		// Dynamic content area
+		// OAuth 回调根据当前阶段替换或追加此动态内容区。
 		this.contentContainer = new Container();
 		this.addChild(this.contentContainer);
 
 		// Input (always present, used when needed)
+		// Input 实例始终保留，仅在需要用户输入的阶段挂载到内容区。
 		this.input = new Input();
 		this.input.onSubmit = () => {
 			if (this.inputResolver) {
@@ -68,6 +74,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 		};
 
 		// Bottom border
+		// 登录对话框底部边框。
 		this.addChild(new DynamicBorder());
 	}
 
@@ -76,12 +83,14 @@ export class LoginDialogComponent extends Container implements Focusable {
 	}
 
 	private replaceInputWithSubmittedText(value: string): void {
+		// 提交后用静态文本替换输入组件，保留用户输入记录并避免继续编辑已结算步骤。
 		this.contentContainer.children = this.contentContainer.children.map((child) =>
 			child === this.input ? new Text(`> ${value}`, 0, 0) : child,
 		);
 	}
 
 	private cancel(): void {
+		// 取消同时中止提供方异步流程、拒绝待处理输入 Promise，并通知上层关闭对话框。
 		this.abortController.abort();
 		if (this.inputRejecter) {
 			this.inputRejecter(new Error("Login cancelled"));
@@ -94,6 +103,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 	/**
 	 * Called by onAuth callback - show URL and optional instructions
 	 */
+	/** 响应 onAuth 事件，展示可点击授权 URL、可选说明并尝试打开系统浏览器。 */
 	showAuth(url: string, instructions?: string): void {
 		this.contentContainer.clear();
 		this.contentContainer.addChild(new Spacer(1));
@@ -110,12 +120,14 @@ export class LoginDialogComponent extends Container implements Focusable {
 		}
 
 		openBrowser(url);
+		// 浏览器打开失败由工具层自行降级，终端中的可点击 URL 始终保留。
 		this.tui.requestRender();
 	}
 
 	/**
 	 * Called by onDeviceCode callback - show URL and user code.
 	 */
+	/** 响应设备码事件，展示验证 URL 和用户需要输入的设备码。 */
 	showDeviceCode(info: OAuthDeviceCodeInfo): void {
 		this.contentContainer.clear();
 		this.contentContainer.addChild(new Spacer(1));
@@ -134,6 +146,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 	/**
 	 * Show input for manual code/URL entry (for callback server providers)
 	 */
+	/** 为无法自动接收回调的提供方显示手动代码或 URL 输入，并返回待提交的 Promise。 */
 	showManualInput(prompt: string): Promise<string> {
 		this.input.setValue("");
 		this.contentContainer.addChild(new Spacer(1));
@@ -143,6 +156,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.tui.requestRender();
 
 		return new Promise((resolve, reject) => {
+			// 保存当前输入阶段的结算函数，提交、取消或中止时只结算一次。
 			this.inputResolver = resolve;
 			this.inputRejecter = reject;
 		});
@@ -152,6 +166,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 	 * Called by onPrompt callback - show prompt and wait for input
 	 * Note: Does NOT clear content, appends to existing (preserves URL from showAuth)
 	 */
+	/** 响应交互提示事件并等待输入；保留既有授权 URL，只在其后追加提示和输入框。 */
 	showPrompt(message: string, placeholder?: string): Promise<string> {
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("text", message), 1, 0));
@@ -171,6 +186,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.tui.requestRender();
 
 		return new Promise((resolve, reject) => {
+			// 新提示替换当前待处理输入 Promise 的结算函数。
 			this.inputResolver = resolve;
 			this.inputRejecter = reject;
 		});
@@ -179,6 +195,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 	/**
 	 * Show informational text without prompting for input.
 	 */
+	/** 用纯信息内容替换动态区域，不等待输入，仅保留关闭操作。 */
 	showInfo(lines: string[]): void {
 		this.contentContainer.clear();
 		this.contentContainer.addChild(new Spacer(1));
@@ -193,6 +210,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 	/**
 	 * Show waiting message (for polling flows like GitHub Copilot)
 	 */
+	/** 为轮询型登录流程追加等待状态和取消提示。 */
 	showWaiting(message: string): void {
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("dim", message), 1, 0));
@@ -203,6 +221,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 	/**
 	 * Called by onProgress callback
 	 */
+	/** 响应进度事件，追加状态文本并请求重绘。 */
 	showProgress(message: string): void {
 		this.contentContainer.addChild(new Text(theme.fg("dim", message), 1, 0));
 		this.tui.requestRender();
@@ -217,6 +236,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 		}
 
 		// Pass to input
+		// 全局取消键优先处理，其余按键转发给内部输入组件。
 		this.input.handleInput(data);
 	}
 }

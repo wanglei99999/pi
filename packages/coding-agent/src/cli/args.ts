@@ -1,5 +1,6 @@
 /**
  * CLI argument parsing and help display
+ * CLI 参数解析与帮助信息输出。
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -50,6 +51,7 @@ export interface Args {
 	messages: string[];
 	fileArgs: string[];
 	/** Unknown flags (potentially extension flags) - map of flag name to value */
+	/** 未知长选项可能由扩展注册，按名称保存其布尔值或字符串值。 */
 	unknownFlags: Map<string, boolean | string>;
 	diagnostics: Array<{ type: "warning" | "error"; message: string }>;
 }
@@ -61,6 +63,7 @@ export function isValidThinkingLevel(level: string): level is ThinkingLevel {
 }
 
 export function parseArgs(args: string[]): Args {
+	// 单次从左到右解析：标量选项后出现者覆盖前值，允许重复的资源选项则按出现顺序累积。
 	const result: Args = {
 		messages: [],
 		fileArgs: [],
@@ -93,6 +96,7 @@ export function parseArgs(args: string[]): Args {
 		} else if (arg === "--system-prompt" && i + 1 < args.length) {
 			result.systemPrompt = args[++i];
 		} else if (arg === "--append-system-prompt" && i + 1 < args.length) {
+			// 每次出现都追加独立片段，后续阶段再按调用顺序合并到 system prompt。
 			result.appendSystemPrompt = result.appendSystemPrompt ?? [];
 			result.appendSystemPrompt.push(args[++i]);
 		} else if (arg === "--name" || arg === "-n") {
@@ -138,6 +142,7 @@ export function parseArgs(args: string[]): Args {
 				});
 			}
 		} else if (arg === "--print" || arg === "-p") {
+			// --print 可顺带消费一个普通消息；@file 和后续选项保留给各自的解析分支。
 			result.print = true;
 			const next = args[i + 1];
 			if (next !== undefined && !next.startsWith("@") && (!next.startsWith("-") || next.startsWith("---"))) {
@@ -170,6 +175,7 @@ export function parseArgs(args: string[]): Args {
 			result.noContextFiles = true;
 		} else if (arg === "--list-models") {
 			// Check if next arg is a search pattern (not a flag or file arg)
+			// 下一参数既不是选项也不是 @file 时才作为搜索模式，否则只启用无过滤列表。
 			if (i + 1 < args.length && !args[i + 1].startsWith("-") && !args[i + 1].startsWith("@")) {
 				result.listModels = args[++i];
 			} else {
@@ -185,7 +191,9 @@ export function parseArgs(args: string[]): Args {
 			result.offline = true;
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
+			// 仅在分类后移除 @ 前缀，文件参数不会混入普通 messages。
 		} else if (arg.startsWith("--")) {
+			// 未知长选项留给扩展二次解析，兼容 --name=value、--name value 和布尔 flag 三种形式。
 			const eqIndex = arg.indexOf("=");
 			if (eqIndex !== -1) {
 				result.unknownFlags.set(arg.slice(2, eqIndex), arg.slice(eqIndex + 1));
@@ -200,6 +208,7 @@ export function parseArgs(args: string[]): Args {
 				}
 			}
 		} else if (arg.startsWith("-") && !arg.startsWith("--")) {
+			// 未知短选项无法可靠映射到扩展名称，因此立即记录诊断而不是放入 unknownFlags。
 			result.diagnostics.push({ type: "error", message: `Unknown option: ${arg}` });
 		} else if (!arg.startsWith("-")) {
 			result.messages.push(arg);
@@ -210,6 +219,7 @@ export function parseArgs(args: string[]): Args {
 }
 
 export function printHelp(extensionFlags?: ExtensionFlag[]): void {
+	// 扩展 flags 在运行时追加到固定帮助文本，核心解析器无需预先知道扩展选项集合。
 	const extensionFlagsText =
 		extensionFlags && extensionFlags.length > 0
 			? `\n${chalk.bold("Extension CLI Flags:")}\n${extensionFlags

@@ -1,6 +1,7 @@
 /**
  * Generic selector component for extensions.
  * Displays a list of string options with keyboard navigation.
+ * 供扩展使用的通用选择器组件，通过键盘导航显示字符串选项列表。
  */
 
 import { Container, getKeybindings, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
@@ -49,6 +50,7 @@ export class ExtensionSelectorComponent extends Container {
 		this.addChild(new Spacer(1));
 
 		if (opts?.timeout && opts.timeout > 0 && opts.tui) {
+			// 倒计时复用取消回调，使超时与用户主动取消遵循相同的上层清理路径。
 			this.countdown = new CountdownTimer(
 				opts.timeout,
 				opts.tui,
@@ -78,6 +80,7 @@ export class ExtensionSelectorComponent extends Container {
 	}
 
 	private updateList(): void {
+		// 选择变化时重建轻量列表，确保箭头、颜色和文本始终来自同一 selectedIndex 快照。
 		this.listContainer.clear();
 		for (let i = 0; i < this.options.length; i++) {
 			const isSelected = i === this.selectedIndex;
@@ -89,6 +92,7 @@ export class ExtensionSelectorComponent extends Container {
 	}
 
 	handleInput(keyData: string): void {
+		// 每次输入时读取当前 keybindings，使运行期配置更新可立即生效。
 		const kb = getKeybindings();
 		if (kb.matches(keyData, "app.tools.expand")) {
 			this.onToggleToolsExpanded?.();
@@ -100,6 +104,7 @@ export class ExtensionSelectorComponent extends Container {
 			this.updateList();
 		} else if (kb.matches(keyData, "tui.select.confirm") || keyData === "\n") {
 			const selected = this.options[this.selectedIndex];
+			// 空选项列表不会触发选择回调，避免向扩展传递不存在的值。
 			if (selected) this.onSelectCallback(selected);
 		} else if (kb.matches(keyData, "tui.select.cancel")) {
 			this.onCancelCallback();
@@ -107,6 +112,7 @@ export class ExtensionSelectorComponent extends Container {
 	}
 
 	dispose(): void {
+		// 组件移除后停止计时器，避免迟到的超时回调再次触发取消流程。
 		this.countdown?.dispose();
 	}
 }

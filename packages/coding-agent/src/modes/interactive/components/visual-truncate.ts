@@ -2,13 +2,18 @@
  * Shared utility for truncating text to visual lines (accounting for line wrapping).
  * Used by both tool-execution.ts and bash-execution.ts for consistent behavior.
  */
+/**
+ * 共享的视觉行尾部截断工具，通过 Text 的真实渲染复用 ANSI、宽字符和字素安全换行规则。
+ */
 
 import { Text } from "@earendil-works/pi-tui";
 
 export interface VisualTruncateResult {
 	/** The visual lines to display */
+	/** 最终需要显示的视觉行。 */
 	visualLines: string[];
 	/** Number of visual lines that were skipped (hidden) */
+	/** 从开头跳过并隐藏的视觉行数量。 */
 	skippedCount: number;
 }
 
@@ -24,6 +29,7 @@ export interface VisualTruncateResult {
  *                   Use 1 when result will be placed in a plain Container.
  * @returns The truncated visual lines and count of skipped lines
  */
+/** 按终端宽度和水平内边距计算视觉行，并从末尾保留指定数量。 */
 export function truncateToVisualLines(
 	text: string,
 	maxVisualLines: number,
@@ -35,6 +41,7 @@ export function truncateToVisualLines(
 	}
 
 	// Create a temporary Text component to render and get visual lines
+	// 使用临时 Text 组件执行与正式界面相同的 ANSI 感知换行，避免自行按字符串长度截断。
 	const tempText = new Text(text, paddingX, 0);
 	const allVisualLines = tempText.render(width);
 
@@ -43,6 +50,7 @@ export function truncateToVisualLines(
 	}
 
 	// Take the last N visual lines
+	// 输出类内容优先保留最新尾部视觉行，并记录被隐藏的前部行数。
 	const truncatedLines = allVisualLines.slice(-maxVisualLines);
 	const skippedCount = allVisualLines.length - maxVisualLines;
 
