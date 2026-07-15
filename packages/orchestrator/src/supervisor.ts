@@ -38,6 +38,12 @@ function cloneInstance(record: InstanceRecord): InstanceRecord {
 // - new_session / switch_session / fork / clone can change sessionId/sessionFile
 // - set_session_name changes a persisted session detail we may want reflected externally
 // - prompt can materialize or advance persisted session state after the child processes it
+// 仅在命令可能改变 instances.json 中保存的实例标识或详情时，才刷新持久化会话元数据。
+// 大多数 RPC 只修改临时运行时状态，因此每次命令后都额外调用 get_state 会浪费 I/O。
+//
+// - new_session / switch_session / fork / clone 可能改变 sessionId/sessionFile
+// - set_session_name 会改变一项可能需要对外同步的持久化会话详情
+// - prompt 经子进程处理后，可能创建或推进持久化会话状态
 const SESSION_METADATA_COMMANDS: ReadonlySet<RpcCommand["type"]> = new Set([
 	"new_session",
 	"switch_session",

@@ -1,3 +1,5 @@
+// Public orchestrator facade: consumers depend on this stable surface rather than internal file layout.
+// Orchestrator 公共入口：调用方依赖该稳定表面，而不是内部文件结构。
 export * from "./config.ts";
 export * from "./handler.ts";
 export * from "./ipc/client.ts";

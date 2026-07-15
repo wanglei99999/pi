@@ -73,5 +73,6 @@ export async function serve(): Promise<void> {
 
 	await new Promise<void>(() => {
 		// Keep the process alive until a signal or fatal error triggers shutdown.
+		// 保持进程存活，直到信号或致命错误触发关闭。
 	});
 }

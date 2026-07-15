@@ -79,6 +79,8 @@ function isNotFoundError(error: unknown): error is RadiusHttpError {
 }
 
 function computeBackoffDelayMs(failureCount: number): number {
+	// Transient failures use capped exponential backoff plus jitter to avoid synchronized retries.
+	// 瞬时故障采用带上限的指数退避并加入抖动，避免多个实例同步重试。
 	const exponentialDelay = Math.min(
 		HEARTBEAT_BACKOFF_MAX_MS,
 		HEARTBEAT_BACKOFF_BASE_MS * 2 ** Math.max(0, failureCount - 1),
@@ -109,6 +111,8 @@ export function getRadiusUrl(): string {
 
 export function getRadiusOrchestratorBaseUrl(): string {
 	const explicitUrl = process.env.PI_RADIUS_ORCHESTRATOR_URL;
+	// The orchestrator-specific override wins; otherwise derive /v1/ from the public Radius URL.
+	// orchestrator 专用覆盖地址优先；否则从公开 Radius URL 派生 /v1/ 地址。
 	if (explicitUrl) {
 		return explicitUrl;
 	}
@@ -119,6 +123,8 @@ export function getRadiusOrchestratorBaseUrl(): string {
 const radiusAuthStorage = AuthStorage.create();
 
 function getStoredRadiusCredential(): OAuthCredential | undefined {
+	// Reload on every lookup so login or logout changes take effect without restarting the process.
+	// 每次读取前重新加载，使登录或退出后的凭证变化无需重启进程即可生效。
 	radiusAuthStorage.reload();
 	const credential = radiusAuthStorage.get(RADIUS_PROVIDER);
 	if (!credential || credential.type !== "oauth") {
@@ -129,6 +135,8 @@ function getStoredRadiusCredential(): OAuthCredential | undefined {
 
 export function getRadiusAccessToken(): string {
 	const storedCredential = getStoredRadiusCredential();
+	// Stored OAuth credentials take precedence over the environment fallback.
+	// 已存储的 OAuth 凭证优先于环境变量回退值。
 	if (typeof storedCredential?.access === "string" && storedCredential.access) {
 		return storedCredential.access;
 	}
@@ -159,6 +167,8 @@ export class RadiusPresence {
 	}
 
 	async start(label?: string): Promise<MachineRecord | undefined> {
+		// Radius integration is an optional no-op when no credential is configured.
+		// 未配置凭证时 Radius 集成是可选的空操作。
 		if (!isRadiusEnabled()) {
 			return undefined;
 		}
@@ -169,6 +179,8 @@ export class RadiusPresence {
 	}
 
 	async stop(): Promise<void> {
+		// Cancel local scheduling before disconnecting; a missing remote record already counts as disconnected.
+		// 先取消本地调度再请求断开；远端记录不存在时视为已经断开。
 		if (this.machineHeartbeatTimer) {
 			clearTimeout(this.machineHeartbeatTimer);
 			this.machineHeartbeatTimer = undefined;
@@ -196,6 +208,8 @@ export class RadiusPresence {
 			return instance;
 		}
 		const machine = this.machine ?? loadMachine();
+		// A Pi presence is always scoped to a registered machine and cannot exist independently.
+		// Pi presence 始终隶属于已注册 machine，不能独立存在。
 		if (!machine) {
 			throw new Error("No registered machine available for Pi registration");
 		}
@@ -236,6 +250,8 @@ export class RadiusPresence {
 
 	private async registerMachine(label?: string): Promise<RegisterMachineResponse> {
 		const existingMachine = this.machine ?? loadMachine();
+		// Re-registration offers the stored machineId to the server and preserves the original createdAt locally.
+		// 重新注册会向服务端提供已存储的 machineId，并在本地保留原始 createdAt。
 		const registered = await post<RegisterMachineResponse>("machines/register", {
 			machineId: existingMachine?.id,
 			label,
@@ -265,6 +281,8 @@ export class RadiusPresence {
 	}
 
 	private scheduleMachineHeartbeat(delayMs: number): void {
+		// One-shot timers prevent overlapping heartbeats; success and retry paths schedule the next attempt explicitly.
+		// 单次 timer 可避免 heartbeat 重叠；成功和重试路径会显式安排下一次尝试。
 		if (this.machineHeartbeatTimer) {
 			clearTimeout(this.machineHeartbeatTimer);
 		}
@@ -284,6 +302,8 @@ export class RadiusPresence {
 			consecutiveNotFoundCount: 0,
 			transientFailureCount: 0,
 		};
+		// Re-registration keeps the local instance key but replaces the remote id and resets failure history.
+		// 重新注册会保留本地 instance key，但替换远端 id 并重置失败历史。
 		state.intervalMs = intervalMs;
 		state.radiusPiId = radiusPiId;
 		state.consecutiveNotFoundCount = 0;
@@ -319,6 +339,8 @@ export class RadiusPresence {
 			this.machineTransientFailureCount = 0;
 			this.scheduleMachineHeartbeat(this.machineHeartbeatIntervalMs);
 		} catch (error) {
+			// Non-404 failures are treated as transient; a 404 has a separate consecutive-miss threshold.
+			// 非 404 故障按瞬时故障处理；404 则使用独立的连续缺失阈值。
 			if (!isNotFoundError(error)) {
 				this.machineTransientFailureCount += 1;
 				const delayMs = computeBackoffDelayMs(this.machineTransientFailureCount);
@@ -329,6 +351,8 @@ export class RadiusPresence {
 
 			this.machineTransientFailureCount = 0;
 			this.machineConsecutiveNotFoundCount += 1;
+			// Require repeated 404 responses before re-establishing server-side identity, tolerating propagation gaps.
+			// 只有连续多次收到 404 才重新建立服务端身份，以容忍短暂的数据传播间隙。
 			if (this.machineConsecutiveNotFoundCount < NOT_FOUND_RETRY_THRESHOLD) {
 				this.scheduleMachineHeartbeat(this.machineHeartbeatIntervalMs);
 				return;
@@ -367,6 +391,8 @@ export class RadiusPresence {
 			state.transientFailureCount = 0;
 			this.schedulePiHeartbeat(instanceId, state.intervalMs);
 		} catch (error) {
+			// Each Pi maintains independent retry counters, so one unhealthy instance does not slow the others.
+			// 每个 Pi 独立维护重试计数，因此单个异常实例不会拖慢其他实例。
 			if (!isNotFoundError(error)) {
 				state.transientFailureCount += 1;
 				const delayMs = computeBackoffDelayMs(state.transientFailureCount);
@@ -405,6 +431,8 @@ export class RadiusPresence {
 	}
 
 	private async reRegisterMachineAndPis(): Promise<void> {
+		// Recover the machine first, then rebuild presence only for instances still live in the coordinator.
+		// 先恢复 machine，再仅为 coordinator 中仍存活的实例重建 presence。
 		const registered = await this.registerMachine(this.machine?.label);
 		this.startMachineHeartbeat(registered.heartbeatIntervalMs);
 
@@ -413,6 +441,8 @@ export class RadiusPresence {
 			try {
 				await this.reRegisterPi(instance.id);
 			} catch (error) {
+				// Per-Pi recovery is isolated so one failure does not abort registration of remaining live instances.
+				// 各 Pi 的恢复相互隔离，单个失败不会中止其余存活实例的注册。
 				console.error(`Radius Pi ${instance.id} re-registration failed: ${formatRadiusError(error)}`);
 			}
 		}
@@ -421,6 +451,8 @@ export class RadiusPresence {
 	private async reRegisterPi(instanceId: string): Promise<boolean> {
 		const instance = this.coordinator?.getLiveInstance(instanceId);
 		if (!instance) {
+			// Drop heartbeat state when the local instance disappeared; there is nothing left to re-register.
+			// 本地实例已消失时删除 heartbeat 状态，因为已无对象需要重新注册。
 			const state = this.piHeartbeatStates.get(instanceId);
 			if (state) {
 				if (state.timer) {
@@ -437,6 +469,8 @@ export class RadiusPresence {
 		}
 
 		const registeredInstance = await this.registerPi(instance);
+		// Publish the new remote id back to the coordinator so future disconnects target the current registration.
+		// 将新的远端 id 回写 coordinator，确保后续断开操作指向当前注册。
 		this.coordinator?.updateInstance(registeredInstance);
 		return true;
 	}

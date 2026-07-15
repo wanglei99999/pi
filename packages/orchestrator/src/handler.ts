@@ -47,6 +47,7 @@ function unknownInstanceError(instanceId: string): ErrorResponse {
 }
 
 // Overhead types
+// 函数重载类型
 export async function handleIpcRequest(request: SpawnRequest): Promise<SpawnResponse | ErrorResponse>;
 export async function handleIpcRequest(request: ListRequest): Promise<ListResponse | ErrorResponse>;
 export async function handleIpcRequest(request: StopRequest): Promise<StopResponse | ErrorResponse>;
