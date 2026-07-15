@@ -45,6 +45,7 @@ export interface GoogleVertexOptions extends StreamOptions {
 	thinking?: {
 		enabled: boolean;
 		budgetTokens?: number; // -1 for dynamic, 0 to disable
+		// -1 表示动态预算，0 表示禁用（仅适用于支持该语义的模型）。
 		level?: GoogleThinkingLevel;
 	};
 	project?: string;
@@ -63,6 +64,7 @@ const THINKING_LEVEL_MAP: Record<GoogleThinkingLevel, ThinkingLevel> = {
 };
 
 // Counter for generating unique tool call IDs
+// 当 Vertex 未返回 ID 或同一响应内 ID 重复时，用进程级计数器参与生成唯一工具调用 ID。
 let toolCallCounter = 0;
 
 export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
@@ -94,10 +96,12 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 		try {
 			const apiKey = resolveApiKey(options);
 			// Create the client using either a Vertex API key, if provided, or ADC with project and location
+			// 提供有效 Vertex API key 时直接认证，否则使用 project、location 与 ADC 创建客户端。
 			const client = apiKey
 				? createClientWithApiKey(model, apiKey, options?.headers)
 				: createClient(model, resolveProject(options), resolveLocation(options), options?.headers, options?.env);
 			let params = buildParams(model, context, options);
+			// onPayload 是发送前的最终扩展边界，返回值可整体替换已构建的请求参数。
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
 				params = nextParams as GenerateContentParameters;
@@ -111,11 +115,14 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 			for await (const chunk of googleStream) {
 				// Vertex uses the same @google/genai GenerateContentResponse type as Gemini.
 				// responseId is documented there as an output-only identifier for each response.
+				// Vertex 与 Gemini 共享 GenerateContentResponse；responseId 是只读响应标识，保留首个非空值。
 				output.responseId ||= chunk.responseId;
 				const candidate = chunk.candidates?.[0];
 				if (candidate?.content?.parts) {
 					for (const part of candidate.content.parts) {
 						if (part.text !== undefined) {
+							// thinking 与普通 text 类型切换时先结束旧块，再创建新块，保持流事件索引稳定。
+							// thoughtSignature 跨 chunk 累积到对应块，供后续同模型请求恢复连续性。
 							const isThinking = isThinkingPart(part);
 							if (
 								!currentBlock ||
@@ -177,6 +184,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 						}
 
 						if (part.functionCall) {
+							// functionCall 开始前关闭当前文本或推理块，使工具调用拥有独立内容边界。
 							if (currentBlock) {
 								if (currentBlock.type === "text") {
 									stream.push({
@@ -197,6 +205,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 							}
 
 							const providedId = part.functionCall.id;
+							// 缺失或重复 ID 会破坏工具结果配对，因此在进入统一 ToolCall 前生成唯一值。
 							const needsNewId =
 								!providedId || output.content.some((b) => b.type === "toolCall" && b.id === providedId);
 							const toolCallId = needsNewId
@@ -212,6 +221,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 							};
 
 							output.content.push(toolCall);
+							// Vertex part 一次携带完整 args，仍转换为统一的 start、单个 delta、end 事件序列。
 							stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
 							stream.push({
 								type: "toolcall_delta",
@@ -232,6 +242,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 				}
 
 				if (chunk.usageMetadata) {
+					// promptTokenCount 包含缓存命中；普通输入扣除 cachedContentTokenCount，thoughts 同时计入输出和 reasoning。
 					output.usage = {
 						input:
 							(chunk.usageMetadata.promptTokenCount || 0) - (chunk.usageMetadata.cachedContentTokenCount || 0),
@@ -283,6 +294,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 			stream.end();
 		} catch (error) {
 			// Remove internal index property used during streaming
+			// 错误返回前移除可能由流式处理附加的内部 index，避免泄漏到持久化消息。
 			for (const block of output.content) {
 				if ("index" in block) {
 					delete (block as { index?: number }).index;
@@ -304,6 +316,7 @@ export const streamSimple: StreamFunction<"google-vertex", SimpleStreamOptions> 
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream => {
 	const base = buildBaseOptions(model, context, options, undefined);
+	// simple 入口把统一 reasoning 级别映射为 Vertex 的 thinkingLevel 或 thinkingBudget 后复用 stream。
 	if (!options?.reasoning) {
 		return stream(model, context, {
 			...base,
@@ -369,6 +382,7 @@ function buildHttpOptions(model: Model<"google-vertex">, optionsHeaders?: Provid
 	const httpOptions: HttpOptions = {};
 	const baseUrl = resolveCustomBaseUrl(model.baseUrl);
 	if (baseUrl) {
+		// 自定义端点按 collection 范围解析；路径已包含版本时清空 apiVersion，防止 SDK 重复追加。
 		httpOptions.baseUrl = baseUrl;
 		httpOptions.baseUrlResourceScope = ResourceScope.COLLECTION;
 		if (baseUrlIncludesApiVersion(baseUrl)) {
@@ -377,6 +391,7 @@ function buildHttpOptions(model: Model<"google-vertex">, optionsHeaders?: Provid
 	}
 
 	const headers = providerHeadersToRecord({ ...model.headers, ...optionsHeaders });
+	// 调用级 headers 覆盖模型默认 headers，再转换为 SDK 接受的普通记录。
 	if (headers) {
 		httpOptions.headers = headers;
 	}
@@ -385,6 +400,7 @@ function buildHttpOptions(model: Model<"google-vertex">, optionsHeaders?: Provid
 }
 
 function resolveCustomBaseUrl(baseUrl: string): string | undefined {
+	// 此处不替换含 {location} 的模板；忽略该值并让 Vertex SDK 使用 project/location 构造默认端点。
 	const trimmed = baseUrl.trim();
 	if (!trimmed || trimmed.includes("{location}")) {
 		return undefined;
@@ -393,6 +409,7 @@ function resolveCustomBaseUrl(baseUrl: string): string | undefined {
 }
 
 function baseUrlIncludesApiVersion(baseUrl: string): boolean {
+	// 优先按 URL pathname 识别版本段；非标准 URL 则用路径正则兼容判断。
 	try {
 		const url = new URL(baseUrl);
 		return url.pathname.split("/").some((part) => /^v\d+(?:beta\d*)?$/.test(part));
@@ -402,11 +419,13 @@ function baseUrlIncludesApiVersion(baseUrl: string): boolean {
 }
 
 function buildGoogleAuthOptions(env?: ProviderEnv): { keyFilename: string } | undefined {
+	// getProviderEnvValue 保持调用作用域 env 优先，并兼容正常 process.env 与 Bun 沙箱回退。
 	const keyFilename = getProviderEnvValue("GOOGLE_APPLICATION_CREDENTIALS", env);
 	return keyFilename ? { keyFilename } : undefined;
 }
 
 function resolveApiKey(options?: GoogleVertexOptions): string | undefined {
+	// 凭据 marker 和占位符不是可发送的 API key，应回退到 ADC 的 project/location 认证路径。
 	const apiKey = options?.apiKey?.trim();
 	if (!apiKey || apiKey === GCP_VERTEX_CREDENTIALS_MARKER || isPlaceholderApiKey(apiKey)) {
 		return undefined;
@@ -419,6 +438,7 @@ function isPlaceholderApiKey(apiKey: string): boolean {
 }
 
 function resolveProject(options?: GoogleVertexOptions): string {
+	// project 优先使用显式 options，其次按 GOOGLE_CLOUD_PROJECT、GCLOUD_PROJECT 查找。
 	const project =
 		options?.project ||
 		getProviderEnvValue("GOOGLE_CLOUD_PROJECT", options?.env) ||
@@ -432,6 +452,7 @@ function resolveProject(options?: GoogleVertexOptions): string {
 }
 
 function resolveLocation(options?: GoogleVertexOptions): string {
+	// location 优先使用显式 options，再回退到 GOOGLE_CLOUD_LOCATION。
 	const location = options?.location || getProviderEnvValue("GOOGLE_CLOUD_LOCATION", options?.env);
 	if (!location) {
 		throw new Error("Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.");
@@ -471,6 +492,7 @@ function buildParams(
 	}
 
 	if (options.thinking?.enabled && model.reasoning) {
+		// Gemini 3 使用 thinkingLevel 枚举，旧模型使用 thinkingBudget；每次请求只采用一种控制方式。
 		const thinkingConfig: ThinkingConfig = { includeThoughts: true };
 		if (options.thinking.level !== undefined) {
 			thinkingConfig.thinkingLevel = THINKING_LEVEL_MAP[options.thinking.level];
@@ -513,6 +535,8 @@ function getDisabledThinkingConfig(model: Model<"google-vertex">): ThinkingConfi
 	// Google docs: Gemini 3.1 Pro cannot disable thinking, and Gemini 3 Flash / Flash-Lite
 	// do not support full thinking-off either. For Gemini 3 models, use the lowest supported
 	// thinkingLevel without includeThoughts so hidden thinking remains invisible to pi.
+	// 这些 Gemini 3 模型无法完全关闭 thinking，因此使用最低支持的 thinkingLevel，
+	// 且不设置 includeThoughts，使内部 thinking 不暴露给 pi。
 	const geminiModel = model as unknown as Model<"google-generative-ai">;
 	if (isGemini3ProModel(geminiModel)) {
 		return { thinkingLevel: ThinkingLevel.LOW };
@@ -522,6 +546,7 @@ function getDisabledThinkingConfig(model: Model<"google-vertex">): ThinkingConfi
 	}
 
 	// Gemini 2.x supports disabling via thinkingBudget = 0.
+	// Gemini 2.x 支持通过 thinkingBudget = 0 完全关闭 thinking。
 	return { thinkingBudget: 0 };
 }
 
@@ -556,6 +581,7 @@ function getGoogleBudget(
 	effort: ClampedThinkingLevel,
 	customBudgets?: ThinkingBudgets,
 ): number {
+	// 自定义预算优先于模型默认表；未识别模型返回 -1，由 Vertex 动态决定预算。
 	if (customBudgets?.[effort] !== undefined) {
 		return customBudgets[effort]!;
 	}

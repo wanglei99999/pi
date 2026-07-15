@@ -26,6 +26,7 @@ import { buildBaseOptions } from "./simple-options.ts";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 // OpenAI Responses rejects max_output_tokens below 16: https://github.com/earendil-works/pi/issues/6265
+// OpenAI Responses 会拒绝小于 16 的 max_output_tokens，因此统一抬升到服务端下限。
 const OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = 16;
 
 function hasHeader(headers: ProviderHeaders | undefined, name: string): boolean {
@@ -46,6 +47,7 @@ function getClientApiKey(provider: string, apiKey: string | undefined, headers: 
 /**
  * Resolve cache retention preference.
  * Defaults to "short" and uses PI_CACHE_RETENTION for backward compatibility.
+ * 解析缓存保留策略；默认使用 "short"，并兼容旧的 PI_CACHE_RETENTION 配置。
  */
 function resolveCacheRetention(cacheRetention?: CacheRetention, env?: ProviderEnv): CacheRetention {
 	if (cacheRetention) {
@@ -77,6 +79,7 @@ function formatOpenAIResponsesError(error: unknown): string {
 }
 
 // OpenAI Responses-specific options
+// OpenAI Responses 专用选项；这些字段会直接影响推理摘要与服务等级。
 export interface OpenAIResponsesOptions extends StreamOptions {
 	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
@@ -85,6 +88,7 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 
 /**
  * Generate function for OpenAI Responses API
+ * OpenAI Responses API 的流式生成入口。
  */
 export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> = (
 	model: Model<"openai-responses">,
@@ -94,6 +98,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 	const stream = new AssistantMessageEventStream();
 
 	// Start async processing
+	// 立即返回事件流，并在后台异步执行请求与增量消费。
 	(async () => {
 		const output: AssistantMessage = {
 			role: "assistant",
@@ -115,6 +120,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 
 		try {
 			// Create OpenAI client
+			// 缓存关闭时不传播 sessionId，避免请求头仍暗示可跨请求复用。
 			const apiKey = getClientApiKey(model.provider, options?.apiKey, options?.headers);
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
@@ -152,6 +158,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 			for (const block of output.content) {
 				delete (block as { index?: number }).index;
 				// partialJson is only a streaming scratch buffer; never persist it.
+				// partialJson 只用于流式拼接，错误结果中也必须清除，避免污染消息回放。
 				delete (block as { partialJson?: string }).partialJson;
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
@@ -200,6 +207,7 @@ function createClient(
 	}
 
 	if (sessionId) {
+		// 部分兼容端点不接受 session_id，但 x-client-request-id 仍可用于请求关联。
 		if (compat.sendSessionIdHeader) {
 			headers.session_id = sessionId;
 		}
@@ -207,6 +215,7 @@ function createClient(
 	}
 
 	// Merge options headers last so they can override defaults
+	// 调用方 header 最后合并，可覆盖模型默认值和动态生成的 Copilot header。
 	if (optionsHeaders) {
 		Object.assign(headers, optionsHeaders);
 	}
@@ -251,6 +260,7 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 
 	if (model.reasoning) {
 		if (options?.reasoningEffort || options?.reasoningSummary) {
+			// 显式请求推理时同时回传加密内容，保证后续轮次能够延续 Responses 推理上下文。
 			const effort = options?.reasoningEffort
 				? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
 				: "medium";
@@ -260,6 +270,7 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 			};
 			params.include = ["reasoning.encrypted_content"];
 		} else if (model.provider !== "github-copilot" && model.thinkingLevelMap?.off !== null) {
+			// 未启用推理时仍按模型映射显式发送关闭值；Copilot 兼容层不支持该路径。
 			params.reasoning = {
 				effort: (model.thinkingLevelMap?.off ?? "none") as NonNullable<typeof params.reasoning>["effort"],
 			};

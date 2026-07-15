@@ -12,6 +12,8 @@ async function resolveValue(
 	ctx: AuthContext,
 	credential: ApiKeyCredential | undefined,
 ): Promise<string | undefined> {
+	// A stored credential is authoritative as a bundle; do not mix its missing fields with ambient environment values.
+	// 已保存凭据作为整体具有权威性，字段缺失时不再与环境变量混用。
 	if (credential) {
 		if (name === CLOUDFLARE_API_KEY) return credential.key;
 		return credential.env?.[name];
@@ -24,6 +26,8 @@ function resolveCloudflareBaseUrl(
 	accountId: string,
 	gatewayId: string | undefined,
 ): string {
+	// Substitute deployment identifiers at auth resolution time while keeping generated model templates immutable.
+	// 在认证解析阶段替换部署标识，同时保持生成的模型 URL 模板不变。
 	return model.baseUrl
 		.replaceAll(`{${CLOUDFLARE_ACCOUNT_ID}}`, accountId)
 		.replaceAll(`{${CLOUDFLARE_GATEWAY_ID}}`, gatewayId ?? "");
@@ -35,6 +39,8 @@ async function resolveCloudflareEnv(
 	ctx: AuthContext,
 	credential: ApiKeyCredential | undefined,
 ): Promise<{ apiKey: string; env: ProviderEnv; baseUrl: string; source: string } | undefined> {
+	// Workers AI needs account credentials, whereas AI Gateway additionally requires a gateway ID.
+	// Workers AI 需要账户凭据，AI Gateway 还必须提供 gateway ID。
 	const apiKey = await resolveValue(CLOUDFLARE_API_KEY, ctx, credential);
 	const accountId = await resolveValue(CLOUDFLARE_ACCOUNT_ID, ctx, credential);
 	const gatewayId = kind === "ai-gateway" ? await resolveValue(CLOUDFLARE_GATEWAY_ID, ctx, credential) : undefined;
@@ -53,6 +59,8 @@ async function resolveCloudflareEnv(
 }
 
 export function cloudflareWorkersAIAuth(): ApiKeyAuth {
+	// Workers AI uses the API key through the normal provider apiKey channel.
+	// Workers AI 通过标准 provider apiKey 通道使用 API key。
 	return {
 		name: "Cloudflare API key",
 		login: async (callbacks) => {
@@ -73,6 +81,8 @@ export function cloudflareWorkersAIAuth(): ApiKeyAuth {
 }
 
 export function cloudflareAIGatewayAuth(): ApiKeyAuth {
+	// AI Gateway authenticates with its dedicated header and explicitly removes incompatible defaults.
+	// AI Gateway 使用专用 header 认证，并显式移除不兼容的默认认证 header。
 	return {
 		name: "Cloudflare API key",
 		login: async (callbacks) => {
@@ -90,6 +100,8 @@ export function cloudflareAIGatewayAuth(): ApiKeyAuth {
 			if (!resolved) return undefined;
 			return {
 				auth: {
+					// Null header values instruct the shared client layer to suppress model-provided auth headers.
+					// null header 值通知共享客户端层抑制模型预设的认证 header。
 					headers: {
 						"cf-aig-authorization": `Bearer ${resolved.apiKey}`,
 						Authorization: null,

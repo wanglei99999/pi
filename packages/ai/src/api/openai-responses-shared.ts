@@ -35,6 +35,7 @@ import { transformMessages } from "./transform-messages.ts";
 
 // =============================================================================
 // Utilities
+// 通用辅助函数
 // =============================================================================
 
 function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): string {
@@ -58,6 +59,7 @@ function parseTextSignature(
 			}
 		} catch {
 			// Fall through to legacy plain-string handling.
+			// JSON 签名解析失败时继续按旧版纯字符串 ID 处理，兼容已有会话。
 		}
 	}
 	return { id: signature };
@@ -85,6 +87,7 @@ export interface ConvertResponsesToolsOptions {
 
 // =============================================================================
 // Message conversion
+// 消息转换
 // =============================================================================
 
 export function convertResponsesMessages<TApi extends Api>(
@@ -107,6 +110,7 @@ export function convertResponsesMessages<TApi extends Api>(
 	};
 
 	const normalizeToolCallId = (id: string, _targetModel: Model<TApi>, source: AssistantMessage): string => {
+		// Responses 使用 call_id|item_id 复合标识；跨提供商重放时分别规范化两部分并保持配对关系。
 		if (!allowedToolCallProviders.has(model.provider)) return normalizeIdPart(id);
 		if (!id.includes("|")) return normalizeIdPart(id);
 		const [callId, itemId] = id.split("|");
@@ -114,6 +118,7 @@ export function convertResponsesMessages<TApi extends Api>(
 		const isForeignToolCall = source.provider !== model.provider || source.api !== model.api;
 		let normalizedItemId = isForeignToolCall ? buildForeignResponsesItemId(itemId) : normalizeIdPart(itemId);
 		// OpenAI Responses API requires item id to start with "fc"
+		// OpenAI Responses API 要求 function_call 条目的 item id 以 "fc" 开头。
 		if (!normalizedItemId.startsWith("fc_")) {
 			normalizedItemId = normalizeIdPart(`fc_${normalizedItemId}`);
 		}
@@ -124,6 +129,7 @@ export function convertResponsesMessages<TApi extends Api>(
 
 	const includeSystemPrompt = options?.includeSystemPrompt ?? true;
 	if (includeSystemPrompt && context.systemPrompt) {
+		// 推理模型优先使用 developer 角色；兼容配置可显式回退到 system。
 		const compat = model.compat as { supportsDeveloperRole?: boolean } | undefined;
 		const role = model.reasoning && compat?.supportsDeveloperRole !== false ? "developer" : "system";
 		messages.push({
@@ -161,6 +167,7 @@ export function convertResponsesMessages<TApi extends Api>(
 				});
 			}
 		} else if (msg.role === "assistant") {
+			// 一条内部 assistant 消息可能展开为多个 Responses 输出条目：reasoning、message 和 function_call。
 			const output: ResponseInput = [];
 			const assistantMsg = msg as AssistantMessage;
 			const isDifferentModel =
@@ -172,6 +179,7 @@ export function convertResponsesMessages<TApi extends Api>(
 			for (const block of msg.content) {
 				if (block.type === "thinking") {
 					if (block.thinkingSignature) {
+						// thinkingSignature 保存完整 reasoning item，原样恢复才能通过同模型推理链校验。
 						const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
 						output.push(reasoningItem);
 					}
@@ -182,6 +190,7 @@ export function convertResponsesMessages<TApi extends Api>(
 						textBlockIndex === 0 ? `msg_pi_${msgIndex}` : `msg_pi_${msgIndex}_${textBlockIndex}`;
 					textBlockIndex++;
 					// OpenAI requires id to be max 64 characters
+					// OpenAI 要求 message id 最长 64 个字符；缺失时生成稳定回退 ID，超长时压缩为哈希。
 					let msgId = parsedSignature?.id;
 					if (!msgId) {
 						msgId = fallbackMessageId;
@@ -204,6 +213,7 @@ export function convertResponsesMessages<TApi extends Api>(
 					// For different-model messages, set id to undefined to avoid pairing validation.
 					// OpenAI tracks which fc_xxx IDs were paired with rs_xxx reasoning items.
 					// By omitting the id, we avoid triggering that validation (like cross-provider does).
+					// 同一提供商/API 下跨模型重放时移除 fc_xxx item id，避免触发它与原 rs_xxx 推理条目的配对校验。
 					if (isDifferentModel && itemId?.startsWith("fc_")) {
 						itemId = undefined;
 					}
@@ -220,6 +230,7 @@ export function convertResponsesMessages<TApi extends Api>(
 			if (output.length === 0) continue;
 			messages.push(...output);
 		} else if (msg.role === "toolResult") {
+			// function_call_output 只引用 call_id；复合标识中的 item_id 仅属于原 function_call 条目。
 			const textResult = msg.content
 				.filter((c): c is TextContent => c.type === "text")
 				.map((c) => c.text)
@@ -268,6 +279,7 @@ export function convertResponsesMessages<TApi extends Api>(
 
 // =============================================================================
 // Tool conversion
+// 工具转换
 // =============================================================================
 
 export function convertResponsesTools(tools: Tool[], options?: ConvertResponsesToolsOptions): OpenAITool[] {
@@ -277,12 +289,14 @@ export function convertResponsesTools(tools: Tool[], options?: ConvertResponsesT
 		name: tool.name,
 		description: tool.description,
 		parameters: tool.parameters as any, // TypeBox already generates JSON Schema
+		// TypeBox 已生成 JSON Schema；此处只适配 SDK 的参数类型声明。
 		strict,
 	}));
 }
 
 // =============================================================================
 // Stream processing
+// 流式事件处理
 // =============================================================================
 
 type StreamingToolCall = ToolCall & { partialJson: string };
@@ -299,7 +313,9 @@ export async function processResponsesStream<TApi extends Api>(
 	model: Model<TApi>,
 	options?: OpenAIResponsesStreamOptions,
 ): Promise<void> {
+	// 只有 completed、incomplete 或 failed 才算协议终态；迭代器自然结束不能视为成功。
 	let sawTerminalResponseEvent = false;
+	// output_index 是 Responses 事件间的关联键，contentIndex 则固定内部消息块和下游事件的位置。
 	const outputSlots = new Map<number, ResponsesOutputSlot>();
 	const getSlot = <TType extends ResponsesOutputSlot["type"]>(
 		outputIndex: number,
@@ -309,6 +325,7 @@ export async function processResponsesStream<TApi extends Api>(
 		return slot?.type === type ? (slot as Extract<ResponsesOutputSlot, { type: TType }>) : undefined;
 	};
 	const createSlot = (outputIndex: number, item: ResponseOutputItem): ResponsesOutputSlot | undefined => {
+		// added 事件建立槽位并立即发出 *_start；后续 delta 和 done 都在同一块上原地更新。
 		if (item.type === "reasoning") {
 			const block: ThinkingContent = { type: "thinking", thinking: "" };
 			output.content.push(block);
@@ -350,6 +367,7 @@ export async function processResponsesStream<TApi extends Api>(
 		return undefined;
 	};
 	const getOrCreateSlot = (outputIndex: number, item: ResponseOutputItem): ResponsesOutputSlot | undefined => {
+		// 兼容缺少 added 事件而直接收到 done 的流，确保最终快照仍能落入输出消息。
 		return outputSlots.get(outputIndex) ?? createSlot(outputIndex, item);
 	};
 	const finalizeResponse = (
@@ -363,6 +381,7 @@ export async function processResponsesStream<TApi extends Api>(
 			const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
 			output.usage = {
 				// OpenAI includes cached tokens in input_tokens, so subtract to get non-cached input
+				// OpenAI 的 input_tokens 已包含缓存命中量；扣除后才是应按普通输入计费的 token。
 				input: (response.usage.input_tokens || 0) - cachedTokens,
 				output: response.usage.output_tokens || 0,
 				cacheRead: cachedTokens,
@@ -380,6 +399,7 @@ export async function processResponsesStream<TApi extends Api>(
 			options.applyServiceTierPricing(output.usage, serviceTier);
 		}
 		// Map status to stop reason
+		// 先映射协议状态；若响应含工具调用，再把普通 stop 收敛为上层统一的 toolUse。
 		output.stopReason = mapStopReason(response?.status);
 		if (output.content.some((b) => b.type === "toolCall") && output.stopReason === "stop") {
 			output.stopReason = "toolUse";
@@ -442,6 +462,7 @@ export async function processResponsesStream<TApi extends Api>(
 				partial: output,
 			});
 		} else if (event.type === "response.function_call_arguments.delta") {
+			// partialJson 保留尚未闭合的参数文本，宽松解析让 UI 可随 delta 展示逐步成形的对象。
 			const slot = getSlot(event.output_index, "toolCall");
 			if (!slot) continue;
 			slot.block.partialJson += event.delta;
@@ -460,6 +481,7 @@ export async function processResponsesStream<TApi extends Api>(
 			slot.block.arguments = parseStreamingJson(slot.block.partialJson);
 
 			if (event.arguments.startsWith(previousPartialJson)) {
+				// done 通常携带累计全文；只补发此前未见的后缀，避免下游重复接收参数字符。
 				const delta = event.arguments.slice(previousPartialJson.length);
 				if (delta.length > 0) {
 					stream.push({
@@ -471,6 +493,7 @@ export async function processResponsesStream<TApi extends Api>(
 				}
 			}
 		} else if (event.type === "response.output_item.done") {
+			// item.done 是权威最终快照，用它校正增量阶段可能缺失或分段方式不同的内容。
 			const item = event.item;
 			const slot = getOrCreateSlot(event.output_index, item);
 
@@ -479,6 +502,7 @@ export async function processResponsesStream<TApi extends Api>(
 				const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
 				slot.block.thinking = summaryText || contentText || slot.block.thinking;
 				slot.block.thinkingSignature = JSON.stringify(item);
+				// 推理正文用于展示，完整 item 则作为不透明签名保存，供后续同模型会话重放。
 				stream.push({
 					type: "thinking_end",
 					contentIndex: slot.contentIndex,
@@ -489,6 +513,7 @@ export async function processResponsesStream<TApi extends Api>(
 			} else if (item.type === "message" && slot?.type === "text") {
 				slot.block.text = item.content?.map((c) => (c.type === "output_text" ? c.text : c.refusal)).join("") || "";
 				slot.block.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
+				// 文本签名同时保存 message id 和 commentary/final_answer 阶段，恢复多阶段输出边界。
 				stream.push({
 					type: "text_end",
 					contentIndex: slot.contentIndex,
@@ -500,6 +525,7 @@ export async function processResponsesStream<TApi extends Api>(
 				slot.block.arguments = parseStreamingJson(item.arguments || slot.block.partialJson || "{}");
 				// Finalize in-place and strip the scratch buffer so replay only
 				// carries parsed arguments.
+				// 原地完成工具调用并删除流式暂存文本，使会话重放只携带已解析 arguments。
 				delete (slot.block as { partialJson?: string }).partialJson;
 				stream.push({
 					type: "toolcall_end",
@@ -526,6 +552,7 @@ export async function processResponsesStream<TApi extends Api>(
 		}
 	}
 	if (!sawTerminalResponseEvent) {
+		// 缺失终态通常表示网络或 SDK 流被截断，不能返回看似完整的部分消息。
 		throw new Error("OpenAI Responses stream ended before a terminal response event");
 	}
 }
@@ -541,6 +568,7 @@ function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): Sto
 		case "cancelled":
 			return "error";
 		// These two are wonky ...
+		// 这两个中间状态理论上不应出现在终态事件中；若出现则按普通停止兼容处理。
 		case "in_progress":
 		case "queued":
 			return "stop";

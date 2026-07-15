@@ -11,6 +11,7 @@ export function anthropicProvider(): Provider<"anthropic-messages"> {
 		baseUrl: "https://api.anthropic.com",
 		auth: {
 			// ANTHROPIC_OAUTH_TOKEN takes precedence over ANTHROPIC_API_KEY
+			// ANTHROPIC_OAUTH_TOKEN 的优先级高于 ANTHROPIC_API_KEY。
 			apiKey: envApiKeyAuth("Anthropic API key", ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]),
 			oauth: lazyOAuth({ name: "Anthropic (Claude Pro/Max)", load: loadAnthropicOAuth }),
 		},

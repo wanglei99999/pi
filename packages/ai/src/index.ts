@@ -6,6 +6,9 @@ export { Type } from "typebox";
 // live under "@earendil-works/pi-ai/providers/*", API implementations under
 // "@earendil-works/pi-ai/api/*", the old global API under
 // "@earendil-works/pi-ai/compat".
+// 此入口仅暴露无副作用的核心能力：不包含生成目录、provider 工厂、api-registry、OAuth 实现或 compat。
+// provider 工厂位于 "@earendil-works/pi-ai/providers/*"，API 实现位于
+// "@earendil-works/pi-ai/api/*"，旧版全局 API 位于 "@earendil-works/pi-ai/compat"。
 export type { AnthropicEffort, AnthropicOptions, AnthropicThinkingDisplay } from "./api/anthropic-messages.ts";
 export type { AzureOpenAIResponsesOptions } from "./api/azure-openai-responses.ts";
 export type { BedrockOptions, BedrockThinkingDisplay } from "./api/bedrock-converse-stream.ts";

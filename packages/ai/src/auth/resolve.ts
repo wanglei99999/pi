@@ -29,6 +29,7 @@ export class ModelsError extends Error {
 }
 
 /** Model shape auth resolution receives: chat or image-generation models. */
+/** 认证解析接收的模型形态：聊天模型或图像生成模型。 */
 export type AuthModel = Model<Api> | ImagesModel<ImagesApi>;
 
 /**
@@ -36,6 +37,11 @@ export type AuthModel = Model<Api> | ImagesModel<ImagesApi>;
  * A stored credential owns the provider: ambient/env is consulted only when
  * nothing is stored. No silent env fallback after a failed refresh or for a
  * credential type without a matching handler.
+ */
+/**
+ * `Models` 与 `ImagesModels` 集合共用的认证解析逻辑。
+ * 已存储凭据确定其所属提供商；仅在没有存储凭据时才查询环境变量等外部认证来源。
+ * 刷新失败或凭据类型没有匹配处理器时，不会静默回退到环境认证。
  */
 export async function resolveProviderAuth(
 	provider: { id: string; auth: ProviderAuth },
@@ -67,6 +73,7 @@ export async function resolveProviderAuth(
 	}
 
 	// Ambient (env vars, AWS profiles, ADC files).
+	// 外部认证来源（环境变量、AWS 配置文件、ADC 文件）。
 	return provider.auth.apiKey ? resolveApiKey(requestAuthContext, provider.auth.apiKey, model, undefined) : undefined;
 }
 
@@ -83,6 +90,11 @@ function overlayEnvAuthContext(base: AuthContext, env: ProviderEnv): AuthContext
  * expiry under the lock, refresh once globally, and persist the rotated
  * credential before release.
  */
+/**
+ * 使用双重检查锁定解析 OAuth（与当前 `AuthStorage` 的模式相同）：
+ * 有效令牌无需加锁；过期令牌先获取锁并在锁内重新检查，只在全局刷新一次，
+ * 且在释放锁前持久化轮换后的凭据。
+ */
 async function resolveStoredOAuth(
 	credentials: CredentialStore,
 	providerId: string,
@@ -93,11 +105,14 @@ async function resolveStoredOAuth(
 
 	if (Date.now() >= credential.expires) {
 		// Optimistic check said expired; the authoritative check runs under the lock.
+		// 乐观检查发现令牌已过期；最终判定仍需在锁内完成。
 		let post: Credential | undefined;
 		try {
 			post = await credentials.modify(providerId, async (current) => {
 				if (current?.type !== "oauth") return undefined; // logged out meanwhile
+				// 此期间可能已退出登录。
 				if (Date.now() < current.expires) return undefined; // another process/request refreshed
+				// 另一个进程或请求已完成刷新。
 				try {
 					return await oauth.refresh(current);
 				} catch (error) {
@@ -109,6 +124,7 @@ async function resolveStoredOAuth(
 			throw new ModelsError("auth", `Credential store modify failed for ${providerId}`, { cause: error });
 		}
 		if (post?.type !== "oauth") return undefined; // logged out meanwhile
+		// 获取锁和完成修改期间可能已退出登录。
 		credential = post;
 	}
 

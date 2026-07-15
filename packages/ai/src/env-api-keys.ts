@@ -1,4 +1,5 @@
 // NEVER convert to top-level imports - breaks browser/Vite builds
+// Node 内置模块保持惰性动态加载，避免浏览器/Vite 构建解析文件系统依赖。
 let _existsSync: typeof import("node:fs").existsSync | null = null;
 let _homedir: typeof import("node:os").homedir | null = null;
 let _join: typeof import("node:path").join | null = null;
@@ -11,6 +12,7 @@ const NODE_OS_SPECIFIER = "node:" + "os";
 const NODE_PATH_SPECIFIER = "node:" + "path";
 
 // Eagerly load in Node.js/Bun environment only
+// 仅 Node.js/Bun 环境预取模块；浏览器路径始终保持无文件系统能力。
 if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
 	dynamicImport(NODE_FS_SPECIFIER).then((m) => {
 		_existsSync = (m as typeof import("node:fs")).existsSync;
@@ -38,21 +40,25 @@ function hasVertexAdcCredentials(env?: ProviderEnv): boolean {
 		// If node modules haven't loaded yet (async import race at startup),
 		// return false WITHOUT caching so the next call retries once they're ready.
 		// Only cache false permanently in a browser environment where fs is never available.
+		// 启动阶段动态导入尚未完成时暂时返回 false 但不缓存，后续调用可重试；只有确认浏览器环境才永久缓存 false。
 		if (!_existsSync || !_homedir || !_join) {
 			const isNode = typeof process !== "undefined" && (process.versions?.node || process.versions?.bun);
 			if (!isNode) {
 				// Definitively in a browser — safe to cache false permanently
+				// 浏览器永远无法访问 ADC 文件，可安全固定为不存在。
 				cachedVertexAdcCredentialsExists = false;
 			}
 			return false;
 		}
 
 		// Check GOOGLE_APPLICATION_CREDENTIALS env var first (standard way)
+		// 显式凭证路径优先于 gcloud 默认 ADC 位置。
 		const gacPath = getProviderEnvValue("GOOGLE_APPLICATION_CREDENTIALS", env);
 		if (gacPath) {
 			cachedVertexAdcCredentialsExists = _existsSync(gacPath);
 		} else {
 			// Fall back to default ADC path (lazy evaluation)
+			// 未指定路径时惰性检查 gcloud 的默认 application_default_credentials.json。
 			cachedVertexAdcCredentialsExists = _existsSync(
 				_join(_homedir(), ".config", "gcloud", "application_default_credentials.json"),
 			);
@@ -67,6 +73,7 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
 	}
 
 	// ANTHROPIC_OAUTH_TOKEN takes precedence over ANTHROPIC_API_KEY
+	// Anthropic OAuth token 的优先级高于普通 API Key。
 	if (provider === "anthropic") {
 		return ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
 	}
@@ -115,6 +122,7 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
  * This only reports actual API key variables. It intentionally excludes ambient
  * credential sources such as AWS profiles, AWS IAM credentials, and Google
  * Application Default Credentials.
+ * 仅返回实际存在的 API Key 环境变量名称，不把 AWS profile、IAM 或 Google ADC 等环境凭证算作 key。
  */
 export function findEnvKeys(provider: KnownProvider, env?: ProviderEnv): string[] | undefined;
 export function findEnvKeys(provider: string, env?: ProviderEnv): string[] | undefined;
@@ -130,6 +138,7 @@ export function findEnvKeys(provider: string, env?: ProviderEnv): string[] | und
  * Get API key for provider from known environment variables, e.g. OPENAI_API_KEY.
  *
  * Will not return API keys for providers that require OAuth tokens.
+ * 按提供商约定顺序解析环境 API Key；仅有环境凭证而无实际 key 时使用内部认证占位值，而非泄露凭证内容。
  */
 export function getEnvApiKey(provider: KnownProvider, env?: ProviderEnv): string | undefined;
 export function getEnvApiKey(provider: string, env?: ProviderEnv): string | undefined;
@@ -141,6 +150,7 @@ export function getEnvApiKey(provider: string, env?: ProviderEnv): string | unde
 
 	// Vertex AI supports either an explicit API key or Application Default Credentials.
 	// Auth is configured via `gcloud auth application-default login`.
+	// Vertex 在 ADC 文件、项目和区域同时存在时视为已认证，返回占位值交由 SDK 使用环境凭证链。
 	if (provider === "google-vertex") {
 		const hasCredentials = hasVertexAdcCredentials(env);
 		const hasProject = !!(
@@ -161,6 +171,7 @@ export function getEnvApiKey(provider: string, env?: ProviderEnv): string | unde
 		// 4. AWS_CONTAINER_CREDENTIALS_RELATIVE_URI - ECS task roles
 		// 5. AWS_CONTAINER_CREDENTIALS_FULL_URI - ECS task roles (full URI)
 		// 6. AWS_WEB_IDENTITY_TOKEN_FILE - IRSA (IAM Roles for Service Accounts)
+		// Bedrock 任一标准凭证来源存在即可视为已配置；具体凭证解析仍由 AWS SDK 完成。
 		if (
 			getProviderEnvValue("AWS_PROFILE", env) ||
 			(getProviderEnvValue("AWS_ACCESS_KEY_ID", env) && getProviderEnvValue("AWS_SECRET_ACCESS_KEY", env)) ||

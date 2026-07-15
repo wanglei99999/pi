@@ -19,6 +19,7 @@ function loadNodeOs(): typeof NodeOs | null {
 }
 
 // NEVER convert to top-level runtime imports - breaks browser/Vite builds
+// 必须通过运行时内建模块探测获取 os；顶层值导入会让浏览器和 Vite 构建尝试解析 Node 模块。
 const _os: typeof NodeOs | null = loadNodeOs();
 
 import { clampThinkingLevel } from "../models.ts";
@@ -61,6 +62,7 @@ const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 const DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS = 15_000;
 // The Codex backend accepts zstd-compressed request bodies on the SSE responses
 // endpoint (the same endpoint the official Codex client compresses against).
+// 仅 SSE 请求体使用该压缩能力；WebSocket 仍发送与官方客户端一致的未压缩 JSON 帧。
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
@@ -199,6 +201,7 @@ function loadNodeZlib(): typeof NodeZlib | null {
 // Returns the zstd-compressed body bytes, or null when compression is
 // unavailable (browser/Vite builds). Callers fall back to sending the
 // uncompressed JSON when this returns null.
+// 压缩属于可选传输优化，运行时不支持或压缩失败时必须无损回退到原始 JSON。
 function compressRequestBodyZstd(bodyJson: string): Uint8Array | null {
 	const zlib = loadNodeZlib();
 	if (!zlib || typeof zlib.zstdCompressSync !== "function") {
@@ -313,6 +316,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 							continue;
 						}
 						if (aborted || (isCodexNonTransportError(error) && !connectionLimitBeforeStart)) {
+							// API/协议错误不能通过更换传输修复；只有建连阶段的传输失败才允许降级到 SSE。
 							throw error;
 						}
 						appendAssistantMessageDiagnostic(
@@ -338,6 +342,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			// Compress the request body once for the SSE path. The Codex backend
 			// decodes Content-Encoding: zstd; the WebSocket transport above sends the
 			// uncompressed JSON frame, matching the official Codex client.
+			// 在重试循环外只压缩一次，确保每次 SSE 尝试发送完全相同的请求负载。
 			const compressedBody = compressRequestBodyZstd(bodyJson);
 			if (compressedBody) {
 				sseHeaders.set("content-encoding", "zstd");
@@ -440,6 +445,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 		} catch (error) {
 			for (const block of output.content) {
 				// partialJson is only a streaming scratch buffer; never persist it.
+				// 流式工具参数尚未闭合时只保存在该临时缓冲区，错误结果中不得泄漏或用于后续重放。
 				delete (block as { partialJson?: string }).partialJson;
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
@@ -484,6 +490,7 @@ function buildRequestBody(
 	const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
 		includeSystemPrompt: false,
 	});
+	// Codex 将系统提示词放在 instructions，input 只承载可重放的会话项，避免重复注入 system 消息。
 
 	const body: RequestBody = {
 		model: model.id,
@@ -493,6 +500,7 @@ function buildRequestBody(
 		input: messages,
 		text: { verbosity: options?.textVerbosity || "low" },
 		include: ["reasoning.encrypted_content"],
+		// 请求加密推理内容，使后续轮次能够回放签名后的 reasoning item，而不暴露内部思维文本。
 		prompt_cache_key: clampOpenAIPromptCacheKey(options?.sessionId),
 		tool_choice: "auto",
 		parallel_tool_calls: true,
@@ -546,6 +554,7 @@ function applyServiceTierPricing(
 	model: Pick<Model<"openai-codex-responses">, "id">,
 ) {
 	const multiplier = getServiceTierCostMultiplier(model, serviceTier);
+	// Responses usage 只提供 token 数；成本仍按请求最终采用的 service tier 在本地兼容换算。
 	if (multiplier === 1) return;
 
 	usage.cost.input *= multiplier;
@@ -560,6 +569,7 @@ function resolveCodexServiceTier(
 	requestServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
 ): ResponseCreateParamsStreaming["service_tier"] | undefined {
 	if (responseServiceTier === "default" && (requestServiceTier === "flex" || requestServiceTier === "priority")) {
+		// Codex 可能把实际接受的请求档位回报为 default；此时保留显式请求值以正确计算费用。
 		return requestServiceTier;
 	}
 	return responseServiceTier ?? requestServiceTier;
@@ -644,6 +654,7 @@ function extractCodexEventError(event: Record<string, unknown>): { code?: string
 }
 
 async function* mapCodexEvents(events: AsyncIterable<Record<string, unknown>>): AsyncGenerator<ResponseStreamEvent> {
+	// Codex 后端存在若干完成事件别名；统一归一化为共享 Responses 处理器认识的 response.completed。
 	for await (const event of events) {
 		const type = typeof event.type === "string" ? event.type : undefined;
 		if (!type) continue;
@@ -669,6 +680,7 @@ async function* mapCodexEvents(events: AsyncIterable<Record<string, unknown>>): 
 				? { ...response, status: normalizeCodexStatus(response.status) }
 				: response;
 			yield { ...event, type: "response.completed", response: normalizedResponse } as ResponseStreamEvent;
+			// 完成事件之后不再接受增量，避免同一响应被重复结算内容或用量。
 			return;
 		}
 
@@ -718,6 +730,7 @@ async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerat
 					.filter((l) => l.startsWith("data:"))
 					.map((l) => l.slice(5).trim());
 				if (dataLines.length > 0) {
+					// 同一 SSE 事件可包含多行 data；拼接后再解析可保持 Responses 事件 JSON 完整。
 					const data = dataLines.join("\n").trim();
 					if (data && data !== "[DONE]") {
 						try {
@@ -883,6 +896,7 @@ async function getWebSocketConstructor(env?: ProviderEnv): Promise<WebSocketCons
 
 	// bun doesn't respect http proxy envs, ref: https://github.com/oven-sh/bun/issues/15489
 	// TODO: remove this when bun supports proxy envs in websocket.
+	// Bun 路径显式解析代理并注入构造参数，其他运行时继续使用原生 WebSocket 行为。
 	if (typeof process !== "undefined" && process.versions?.bun) {
 		const WebSocketWithProxy = class extends WebSocket {
 			constructor(url: string | URL, options?: string | string[] | Record<string, unknown>) {
@@ -933,6 +947,7 @@ function getWebSocketReadyState(socket: WebSocketLike): number | undefined {
 function isWebSocketReusable(socket: WebSocketLike): boolean {
 	const readyState = getWebSocketReadyState(socket);
 	// If readyState is unavailable, assume the runtime keeps it open/reusable.
+	// 某些兼容实现不暴露 readyState；此时保持乐观复用，实际失效会在下一次发送时触发清理。
 	return readyState === undefined || readyState === 1;
 }
 
@@ -1314,11 +1329,13 @@ function getCachedWebSocketInputDelta(
 	continuation: CachedWebSocketContinuationState,
 ): ResponseInput | undefined {
 	if (!requestBodiesMatchExceptInput(body, continuation.lastRequestBody)) {
+		// 模型、工具或生成参数发生变化时不能复用 previous_response_id，必须重发完整上下文。
 		return undefined;
 	}
 
 	const currentInput = body.input ?? [];
 	const baseline = [...(continuation.lastRequestBody.input ?? []), ...continuation.lastResponseItems];
+	// 新请求应以前次输入加前次响应项为前缀；只有严格前缀匹配时，剩余部分才是安全的上下文增量。
 	if (currentInput.length < baseline.length) {
 		return undefined;
 	}
@@ -1339,6 +1356,7 @@ function buildCachedWebSocketRequestBody(entry: CachedWebSocketConnection, body:
 
 	const delta = getCachedWebSocketInputDelta(body, continuation);
 	if (!delta || !continuation.lastResponseId) {
+		// 任一连续性条件不成立就清空缓存，避免用错误 response id 重放工具调用或推理签名。
 		entry.continuation = undefined;
 		return body;
 	}
@@ -1391,6 +1409,7 @@ async function processWebSocketStream(
 	const useCachedContext = options?.transport === "websocket-cached" || options?.transport === "auto";
 	// ChatGPT Codex Responses rejects `store: true` ("Store must be set to false").
 	// WebSocket continuation still works via connection-scoped previous_response_id state.
+	// 延续状态绑定在复用连接上而非服务端持久存储，因此连接失效时必须退回完整 input。
 	const fullBody = body;
 	const requestBody = useCachedContext && entry ? buildCachedWebSocketRequestBody(entry, fullBody) : fullBody;
 	const stats = options?.sessionId ? getOrCreateWebSocketDebugStats(options.sessionId) : undefined;
@@ -1435,6 +1454,7 @@ async function processWebSocketStream(
 			const responseItems = convertResponsesMessages(model, { messages: [output] }, CODEX_TOOL_CALL_PROVIDERS, {
 				includeSystemPrompt: false,
 			}).filter((item) => item.type !== "function_call_output");
+			// 响应中的 function_call 会成为下一轮基线；其 output 尚未发生，不能提前缓存为已完成工具结果。
 			entry.continuation = {
 				lastRequestBody: fullBody,
 				lastResponseId: output.responseId,
@@ -1488,6 +1508,7 @@ async function parseErrorResponse(response: Response): Promise<{ message: string
 // ============================================================================
 
 function extractAccountId(token: string): string {
+	// Codex 后端除 Bearer token 外还要求 JWT 私有 claim 中的 ChatGPT account id。
 	try {
 		const parts = token.split(".");
 		if (parts.length !== 3) throw new Error("Invalid token");
@@ -1515,6 +1536,7 @@ function buildBaseCodexHeaders(
 ): Headers {
 	const headers = new Headers(initHeaders);
 	for (const [key, value] of Object.entries(additionalHeaders || {})) {
+		// 调用方 header 覆盖模型默认值；null 明确表示删除已有 header。
 		if (value === null) {
 			headers.delete(key);
 		} else {
@@ -1523,6 +1545,7 @@ function buildBaseCodexHeaders(
 	}
 	headers.set("Authorization", `Bearer ${token}`);
 	headers.set("chatgpt-account-id", accountId);
+	// 鉴权 token 与账户路由头必须成对发送，否则请求可能落到错误账户或被后端拒绝。
 	headers.set("originator", "pi");
 	const userAgent = _os ? `pi (${_os.platform()} ${_os.release()}; ${_os.arch()})` : "pi (browser)";
 	headers.set("User-Agent", userAgent);
@@ -1561,6 +1584,7 @@ function buildWebSocketHeaders(
 	headers.delete("content-type");
 	headers.delete("OpenAI-Beta");
 	headers.delete("openai-beta");
+	// Headers 大小写不敏感，但不同实现可能保留原始键名；先清理两种形式再写入 WebSocket beta 标记。
 	headers.set("OpenAI-Beta", OPENAI_BETA_RESPONSES_WEBSOCKETS);
 	headers.set("x-client-request-id", requestId);
 	headers.set("session-id", requestId);

@@ -11,6 +11,11 @@
  * - Anthropic: Computed as input + output + cacheRead + cacheWrite
  * - Other OpenAI-compatible providers: Uses native total_tokens field
  */
+/**
+ * 跨全部 provider 验证 totalTokens 字段。
+ * totalTokens 表示 LLM 实际处理的 token 总量，包含输入、输出以及缓存读写，
+ * 并作为下一次请求估算上下文占用的基础。测试矩阵同时覆盖原生总数字段与分项求和实现。
+ */
 
 import { describe, expect, it } from "vitest";
 import { complete, getModel } from "../src/compat.ts";
@@ -24,6 +29,7 @@ import { hasCloudflareAiGatewayCredentials, hasCloudflareWorkersAICredentials } 
 import { resolveApiKey } from "./oauth.ts";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
+// 在模块加载阶段异步解析 OAuth token，使各测试只负责对应 provider 的统计断言。
 const oauthTokens = await Promise.all([
 	resolveApiKey("anthropic"),
 	resolveApiKey("github-copilot"),
@@ -32,6 +38,7 @@ const oauthTokens = await Promise.all([
 const [anthropicOAuthToken, githubCopilotToken, openaiCodexToken] = oauthTokens;
 
 // Generate a long system prompt to trigger caching (>2k bytes for most providers)
+// 构造足够长的 system prompt，以越过多数 provider 的缓存触发阈值（>2k bytes）。
 const LONG_SYSTEM_PROMPT = `You are a helpful assistant. Be concise in your responses.
 
 Here is some additional context that makes this system prompt long enough to trigger caching:
@@ -49,6 +56,7 @@ async function testTotalTokensWithCache<TApi extends Api>(
 	options: StreamOptionsWithExtras = {},
 ): Promise<{ first: Usage; second: Usage }> {
 	// First request - no cache
+	// 第一次请求建立缓存基线，不假定已经发生 cacheRead。
 	const context1: Context = {
 		systemPrompt: LONG_SYSTEM_PROMPT,
 		messages: [
@@ -64,6 +72,7 @@ async function testTotalTokensWithCache<TApi extends Api>(
 	expect(response1.stopReason).toBe("stop");
 
 	// Second request - should trigger cache read (same system prompt, add conversation)
+	// 第二次请求复用相同 system prompt 并追加对话，用于观察 cacheRead 或 cacheWrite。
 	const context2: Context = {
 		systemPrompt: LONG_SYSTEM_PROMPT,
 		messages: [
@@ -119,6 +128,7 @@ describe("totalTokens field", () => {
 				assertTotalTokensEqualsComponents(second);
 
 				// Anthropic should have cache activity
+				// Anthropic 至少应在两次请求之一报告 cacheRead 或 cacheWrite。
 				const hasCache = second.cacheRead > 0 || second.cacheWrite > 0 || first.cacheWrite > 0;
 				expect(hasCache).toBe(true);
 			},
@@ -142,6 +152,7 @@ describe("totalTokens field", () => {
 				assertTotalTokensEqualsComponents(second);
 
 				// Anthropic should have cache activity
+				// Anthropic 至少应在两次请求之一报告 cacheRead 或 cacheWrite。
 				const hasCache = second.cacheRead > 0 || second.cacheWrite > 0 || first.cacheWrite > 0;
 				expect(hasCache).toBe(true);
 			},

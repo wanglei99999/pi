@@ -188,6 +188,7 @@ function messageToText(message: Message): string {
 }
 
 function serializeContext(context: Context): string {
+	// 生成只用于测试计量的稳定文本表示；图片记录 mimeType 和长度，避免把大段 base64 纳入估算。
 	const parts: string[] = [];
 	if (context.systemPrompt) {
 		parts.push(`system:${context.systemPrompt}`);
@@ -216,6 +217,7 @@ function withUsageEstimate(
 	options: StreamOptions | undefined,
 	promptCache: Map<string, string>,
 ): AssistantMessage {
+	// faux usage 使用近似字符/token 比例，目标是覆盖缓存与计费分支，而非模拟提供商精确分词。
 	const promptText = serializeContext(context);
 	const promptTokens = estimateTokens(promptText);
 	const outputTokens = estimateTokens(assistantContentToText(message.content));
@@ -225,6 +227,7 @@ function withUsageEstimate(
 	const sessionId = options?.sessionId;
 
 	if (sessionId && options?.cacheRetention !== "none") {
+		// 同一 sessionId 以前后提示词的最长公共前缀模拟 cacheRead，其余新增后缀计为 cacheWrite。
 		const previousPrompt = promptCache.get(sessionId);
 		if (previousPrompt) {
 			const cachedChars = commonPrefixLength(previousPrompt, promptText);
@@ -251,6 +254,7 @@ function withUsageEstimate(
 }
 
 function splitStringByTokenSize(text: string, minTokenSize: number, maxTokenSize: number): string[] {
+	// 随机 chunk 大小刻意打散事件边界，帮助测试避免依赖固定的 delta 分段。
 	const chunks: string[] = [];
 	let index = 0;
 	while (index < text.length) {
@@ -298,6 +302,7 @@ function createAbortedMessage(partial: AssistantMessage): AssistantMessage {
 }
 
 function scheduleChunk(chunk: string, tokensPerSecond: number | undefined): Promise<void> {
+	// 未配置节流时仍延迟到 microtask，保持测试流始终异步；配置后按估算 token 数模拟传输速率。
 	if (!tokensPerSecond || tokensPerSecond <= 0) {
 		return new Promise((resolve) => queueMicrotask(resolve));
 	}
@@ -313,6 +318,7 @@ async function streamWithDeltas(
 	tokensPerSecond: number | undefined,
 	signal: AbortSignal | undefined,
 ): Promise<void> {
+	// 把预制的最终消息展开为真实 start/delta/end 序列，并在块边界及每次等待后检查取消。
 	const partial: AssistantMessage = { ...message, content: [] };
 	if (signal?.aborted) {
 		const aborted = createAbortedMessage(partial);
@@ -375,6 +381,7 @@ async function streamWithDeltas(
 		}
 
 		partial.content = [...partial.content, { type: "toolCall", id: block.id, name: block.name, arguments: {} }];
+		// 工具参数以 JSON 文本分块发送；partial 在结束前保持空 arguments，最终事件再写入完整对象。
 		stream.push({ type: "toolcall_start", contentIndex: index, partial: { ...partial } });
 		for (const chunk of splitStringByTokenSize(JSON.stringify(block.arguments), minTokenSize, maxTokenSize)) {
 			await scheduleChunk(chunk, tokensPerSecond);
@@ -401,6 +408,7 @@ async function streamWithDeltas(
 }
 
 export function createFauxCore(options: RegisterFauxProviderOptions) {
+	// 默认随机 api 避免旧 API 注册表中的测试冲突；显式 api/provider 可用于验证固定路由行为。
 	const api = options.api ?? randomId(DEFAULT_API);
 	const provider = options.provider ?? DEFAULT_PROVIDER;
 	const minTokenSize = Math.max(
@@ -441,11 +449,13 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 
 	const stream: StreamFunction<string, StreamOptions> = (requestModel, context, streamOptions) => {
 		const outer = createAssistantMessageEventStream();
+		// 响应按 FIFO 在调用开始时出队，callCount 也同步递增，因此并发请求仍获得确定的队列归属。
 		const step = pendingResponses.shift();
 		state.callCount++;
 
 		queueMicrotask(async () => {
 			try {
+				// faux 不发起网络请求，但仍触发 onResponse，让调用方的响应钩子路径可被测试。
 				await streamOptions?.onResponse?.({ status: 200, headers: {} }, requestModel);
 				if (!step) {
 					let message = createErrorMessage(
@@ -460,6 +470,7 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 					return;
 				}
 
+				// 工厂响应可根据完整 context、选项、调用次数和请求模型动态生成结果。
 				const resolved =
 					typeof step === "function" ? await step(context, streamOptions, state, requestModel) : step;
 				let message = cloneMessage(resolved, api, provider, requestModel.id);
@@ -496,9 +507,11 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 		getModel,
 		state,
 		setResponses(responses: FauxResponseStep[]) {
+			// setResponses 替换尚未消费的队列，适合在测试阶段之间重置场景。
 			pendingResponses = [...responses];
 		},
 		appendResponses(responses: FauxResponseStep[]) {
+			// appendResponses 保留现有步骤并追加后续响应，用于逐步驱动多轮会话。
 			pendingResponses.push(...responses);
 		},
 		getPendingResponseCount() {
@@ -509,6 +522,7 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 
 /**
  * Faux provider for tests built on explicit `Models` collections:
+ * 面向显式 `Models` 集合测试的 faux provider；不写入全局注册表，也不需要网络或真实认证。
  *
  * ```ts
  * const faux = fauxProvider();

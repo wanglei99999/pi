@@ -6,8 +6,10 @@
  *
  * OpenAI Responses API generates IDs in format: {call_id}|{id}
  * where {id} can be 400+ chars with special characters (+, /, =).
+ * OpenAI Responses API 会生成 {call_id}|{id} 格式，其中 {id} 可能超过 400 字符并包含特殊字符。
  *
  * Regression test for: https://github.com/earendil-works/pi-mono/issues/1022
+ * 对 issue #1022 的跨提供商工具调用 ID 回归进行验证。
  */
 
 import { Type } from "typebox";
@@ -17,11 +19,13 @@ import type { AssistantMessage, Message, Tool, ToolResultMessage } from "../src/
 import { resolveApiKey } from "./oauth.ts";
 
 // Resolve API keys
+// 预先解析所需凭据，使缺少外部认证的实时用例可以明确跳过。
 const copilotToken = await resolveApiKey("github-copilot");
 const openrouterKey = getEnvApiKey("openrouter");
 const codexToken = await resolveApiKey("openai-codex");
 
 // Simple echo tool for testing
+// 使用最小 echo 工具隔离 ID 归一化行为，不引入工具业务逻辑变量。
 const echoToolSchema = Type.Object({
 	message: Type.String({ description: "Message to echo back" }),
 });
@@ -40,6 +44,7 @@ const echoTool: Tool<typeof echoToolSchema> = {
  * 3. Switch to openai-codex gpt-5.5 and complete
  *
  * Both should succeed without "call_id too long" errors.
+ * 两次跨提供商继续对话都不应出现 "call_id too long" 类错误。
  */
 describe("Tool Call ID Normalization - Live Handoff", () => {
 	it.skipIf(!copilotToken || !openrouterKey)(
@@ -49,6 +54,7 @@ describe("Tool Call ID Normalization - Live Handoff", () => {
 			const openrouterModel = getModel("openrouter", "openai/gpt-5.2-codex");
 
 			// Step 1: Generate tool call with github-copilot
+			// 第一步先由 github-copilot 生成 OpenAI Responses 风格的工具调用 ID。
 			const userMessage: Message = {
 				role: "user",
 				content: "Use the echo tool to echo 'hello world'",
@@ -72,12 +78,14 @@ describe("Tool Call ID Normalization - Live Handoff", () => {
 			expect(toolCall!.type).toBe("toolCall");
 
 			// Verify it's a pipe-separated ID (OpenAI Responses format)
+			// 确认测试前提成立：上游 ID 的确采用管道符分隔格式。
 			if (toolCall?.type === "toolCall") {
 				expect(toolCall.id).toContain("|");
 				console.log(`Tool call ID from github-copilot: ${toolCall.id.slice(0, 80)}...`);
 			}
 
 			// Create tool result
+			// 工具结果保留原始长 ID，以验证下游转换而非测试预处理。
 			const toolResult: ToolResultMessage = {
 				role: "toolResult",
 				toolCallId: (toolCall as any).id,
@@ -88,6 +96,7 @@ describe("Tool Call ID Normalization - Live Handoff", () => {
 			};
 
 			// Step 2: Complete with openrouter (uses openai-completions API)
+			// 第二步切换到 openai-completions 适配器，验证历史消息转换边界。
 			const openrouterResponse = await completeSimple(
 				openrouterModel,
 				{
@@ -104,6 +113,7 @@ describe("Tool Call ID Normalization - Live Handoff", () => {
 			);
 
 			// Should NOT fail with "call_id too long" error
+			// 断言关注请求不能因 ID 长度失败，而不约束模型的自然语言回复内容。
 			expect(openrouterResponse.stopReason, `OpenRouter error: ${openrouterResponse.errorMessage}`).not.toBe(
 				"error",
 			);
@@ -151,6 +161,7 @@ describe("Tool Call ID Normalization - Live Handoff", () => {
 			};
 
 			// Step 2: Complete with openai-codex (uses openai-codex-responses API)
+			// 第二条路径验证 Responses 到 Codex Responses 之间也会执行正确归一化。
 			const codexResponse = await completeSimple(
 				codexModel,
 				{
@@ -179,13 +190,16 @@ describe("Tool Call ID Normalization - Live Handoff", () => {
  *
  * Uses the exact tool call ID format that caused the error:
  * "call_xxx|very_long_base64_with_special_chars+/="
+ * 使用 issue 中实际失败的 ID 形态，覆盖长度和特殊字符组合。
  */
 describe("Tool Call ID Normalization - Prefilled Context", () => {
 	// Exact tool call ID from issue #1022 JSONL
+	// 保留 issue JSONL 中的原始值，避免合成数据遗漏触发条件。
 	const FAILING_TOOL_CALL_ID =
 		"call_pAYbIr76hXIjncD9UE4eGfnS|t5nnb2qYMFWGSsr13fhCd1CaCu3t3qONEPuOudu4HSVEtA8YJSL6FAZUxvoOoD792VIJWl91g87EdqsCWp9krVsdBysQoDaf9lMCLb8BS4EYi4gQd5kBQBYLlgD71PYwvf+TbMD9J9/5OMD42oxSRj8H+vRf78/l2Xla33LWz4nOgsddBlbvabICRs8GHt5C9PK5keFtzyi3lsyVKNlfduK3iphsZqs4MLv4zyGJnvZo/+QzShyk5xnMSQX/f98+aEoNflEApCdEOXipipgeiNWnpFSHbcwmMkZoJhURNu+JEz3xCh1mrXeYoN5o+trLL3IXJacSsLYXDrYTipZZbJFRPAucgbnjYBC+/ZzJOfkwCs+Gkw7EoZR7ZQgJ8ma+9586n4tT4cI8DEhBSZsWMjrCt8dxKg==";
 
 	// Build prefilled context with the failing ID
+	// 构造已存在于历史中的工具调用，验证回放路径而非实时生成路径。
 	function buildPrefilledMessages(): Message[] {
 		const userMessage: Message = {
 			role: "user",

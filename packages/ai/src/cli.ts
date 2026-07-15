@@ -8,11 +8,15 @@ import type { OAuthCredentials, OAuthProviderId } from "./utils/oauth/types.ts";
 const AUTH_FILE = "auth.json";
 const PROVIDERS = getOAuthProviders();
 
+// Keep readline prompting behind a Promise so every OAuth callback can share one sequential input channel.
+// 将 readline 提示封装为 Promise，使所有 OAuth 回调复用同一个顺序输入通道。
 function prompt(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
 	return new Promise((resolve) => rl.question(question, resolve));
 }
 
 function loadAuth(): Record<string, { type: "oauth" } & OAuthCredentials> {
+	// Treat a missing or malformed local file as an empty store; login can recreate it without a migration step.
+	// 缺失或损坏的本地文件按空存储处理，登录流程可直接重建而无需迁移步骤。
 	if (!existsSync(AUTH_FILE)) return {};
 	try {
 		return JSON.parse(readFileSync(AUTH_FILE, "utf-8"));
@@ -22,6 +26,8 @@ function loadAuth(): Record<string, { type: "oauth" } & OAuthCredentials> {
 }
 
 function saveAuth(auth: Record<string, { type: "oauth" } & OAuthCredentials>): void {
+	// This standalone CLI owns a simple local JSON store; embedding applications should use their credential store.
+	// 此独立 CLI 使用简单本地 JSON 存储；嵌入式应用应使用自身的凭据存储实现。
 	writeFileSync(AUTH_FILE, JSON.stringify(auth, null, 2), "utf-8");
 }
 
@@ -33,6 +39,8 @@ async function login(providerId: OAuthProviderId): Promise<void> {
 	}
 
 	const rl = createInterface({ input: process.stdin, output: process.stdout });
+	// One readline instance spans browser, device-code, prompt, and selector callbacks for the whole flow.
+	// 单个 readline 实例贯穿浏览器、device code、prompt 和 selector 回调的完整流程。
 	const promptFn = (msg: string) => prompt(rl, `${msg} `);
 
 	try {
@@ -63,6 +71,8 @@ async function login(providerId: OAuthProviderId): Promise<void> {
 		});
 
 		const auth = loadAuth();
+		// Replace only the selected provider entry so credentials for other providers remain intact.
+		// 仅替换当前提供商条目，保留其他提供商的已有凭据。
 		auth[providerId] = { type: "oauth", ...credentials };
 		saveAuth(auth);
 
@@ -107,6 +117,8 @@ Examples:
 		let provider = args[1] as OAuthProviderId | undefined;
 
 		if (!provider) {
+			// Interactive selection is only a fallback; an explicit provider ID remains script-friendly.
+			// 交互选择仅作为回退；显式 provider ID 仍便于脚本调用。
 			const rl = createInterface({ input: process.stdin, output: process.stdout });
 			console.log("Select a provider:\n");
 			for (let i = 0; i < PROVIDERS.length; i++) {
@@ -142,6 +154,8 @@ Examples:
 }
 
 main().catch((err) => {
+	// Convert uncaught flow failures into a stable CLI exit status without changing provider error text.
+	// 将未捕获的流程失败转换为稳定的 CLI 退出状态，同时不改写提供商错误文本。
 	console.error("Error:", err.message);
 	process.exit(1);
 });

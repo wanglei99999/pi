@@ -21,6 +21,12 @@
  *
  * Fixtures are generated fresh on each run.
  */
+/**
+ * 跨 provider 交接测试验证一个 provider/model 生成的上下文能否被另一个消费，
+ * 重点覆盖 tool call ID、thinking block 和消息格式的转换兼容性。
+ * 每次运行先通过真实 API 生成含工具调用与结果的上下文，再让每个目标模型消费所有其他来源的消息；
+ * fixture 不复用缓存，因此该文件属于依赖凭据、网络和 provider 实时行为的集成测试。
+ */
 
 import { writeFileSync } from "fs";
 import { Type } from "typebox";
@@ -32,6 +38,7 @@ import { hasCloudflareAiGatewayCredentials, hasCloudflareWorkersAICredentials } 
 import { resolveApiKey } from "./oauth.ts";
 
 // Simple tool for testing
+// 使用最小工具定义生成真实 toolCall/toolResult 消息，避免业务逻辑干扰转换验证。
 const testToolSchema = Type.Object({
 	value: Type.Number({ description: "A number to double" }),
 });
@@ -43,6 +50,7 @@ const testTool: Tool<typeof testToolSchema> = {
 };
 
 // Provider/model pairs to test
+// 测试矩阵同时覆盖 provider、模型及必要的 API 覆盖，以验证不同协议组合。
 interface ProviderModelPair {
 	provider: string;
 	model: string;
@@ -133,6 +141,7 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 ];
 
 // Cached context structure
+// 单次测试运行内保存生成上下文及其来源元数据；不会跨运行复用。
 interface CachedContext {
 	label: string;
 	provider: string;
@@ -145,6 +154,9 @@ interface CachedContext {
 /**
  * Get API key for provider - checks OAuth storage first, then env vars
  */
+/**
+ * 获取 provider 的 API key：优先检查 OAuth 存储，再回退到环境变量。
+ */
 async function getApiKey(provider: string): Promise<string | undefined> {
 	const oauthKey = await resolveApiKey(provider);
 	if (oauthKey) return oauthKey;
@@ -153,6 +165,9 @@ async function getApiKey(provider: string): Promise<string | undefined> {
 
 /**
  * Synchronous check for API key availability (env vars only, for skipIf)
+ */
+/**
+ * 同步检查认证是否可用，供 skipIf 在测试注册阶段决定是否跳过。
  */
 function hasApiKey(pair: ProviderModelPair): boolean {
 	if (pair.provider === "azure-openai-responses") {
@@ -177,6 +192,9 @@ function getHeaders(pair: ProviderModelPair): Record<string, string> | undefined
 /**
  * Check if any provider has API keys available (for skipIf at describe level)
  */
+/**
+ * 检查矩阵中是否至少有一个 provider 可认证，用于 describe 级 skipIf。
+ */
 function hasAnyApiKey(): boolean {
 	return PROVIDER_MODEL_PAIRS.some((pair) => hasApiKey(pair));
 }
@@ -196,6 +214,10 @@ function dumpFailurePayload(params: { label: string; error: string; payload?: un
 /**
  * Generate a context from a provider/model pair.
  * Makes a real API call to get authentic tool call IDs and thinking blocks.
+ */
+/**
+ * 为一个 provider/model 组合生成上下文；通过真实 API 获取原生 tool call ID 与 thinking block，
+ * 使后续交接验证覆盖实际协议数据，而不是人工构造的理想化 fixture。
  */
 async function generateContext(
 	pair: ProviderModelPair,
@@ -393,6 +415,7 @@ describe.skipIf(!hasAnyApiKey())("Cross-Provider Handoff", () => {
 				}
 
 				// Collect messages from ALL OTHER contexts
+				// 收集除当前目标外的全部上下文，形成多来源消息与工具调用转换矩阵。
 				const otherMessages: Message[] = [];
 				for (const [label, ctx] of Object.entries(contexts)) {
 					if (label === targetPair.label) continue;

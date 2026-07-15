@@ -1,14 +1,18 @@
 /**
  * Test context overflow error handling across providers.
+ * 测试不同 provider 对上下文溢出错误的处理。
  *
  * Context overflow occurs when the input (prompt + history) exceeds
  * the model's context window. This is different from output token limits.
+ * 上下文溢出表示输入（prompt 与历史消息）超过模型上下文窗口，与输出 token 上限不同。
  *
  * Expected behavior: All providers should return stopReason: "error"
  * with an errorMessage that indicates the context was too large,
  * OR (for z.ai) return successfully with usage.input > contextWindow.
+ * 预期大多数 provider 返回可识别的溢出错误；z.ai 还需覆盖成功响应但 usage.input 超窗的特殊路径。
  *
  * The isContextOverflow() function must return true for all providers.
+ * 回归目标是确保 isContextOverflow() 能跨不同错误格式统一识别这些结果。
  */
 
 import type { ChildProcess } from "child_process";
@@ -22,14 +26,17 @@ import { hasBedrockCredentials } from "./bedrock-utils.ts";
 import { resolveApiKey } from "./oauth.ts";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
+// 在模块级提前解析 OAuth token，使凭据缺失时各用例可直接按 provider 跳过。
 const oauthTokens = await Promise.all([resolveApiKey("github-copilot"), resolveApiKey("openai-codex")]);
 const [githubCopilotToken, openaiCodexToken] = oauthTokens;
 
 // Lorem ipsum paragraph for realistic token estimation
+// 使用词形有变化的段落，使字符到 token 的估算比重复单字符更接近真实输入。
 const LOREM_IPSUM = `Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. `;
 
 // Generate a string that will exceed the context window
 // Using chars/4 as token estimate (works better with varied text than repeated chars)
+// 在估算值上额外留出余量，避免不同 tokenizer 的偏差让输入意外落回窗口以内。
 function generateOverflowContent(contextWindow: number): string {
 	const targetTokens = contextWindow + 10000; // Exceed by 10k tokens
 	const targetChars = targetTokens * 4 * 1.5;
@@ -90,6 +97,7 @@ function logResult(result: OverflowResult) {
 // =============================================================================
 // Anthropic
 // Expected pattern: "prompt is too long: X tokens > Y maximum"
+// Anthropic 两种认证路径应产生相同的标准化错误语义，并匹配其原生错误格式。
 // =============================================================================
 
 describe("Context overflow error handling", () => {
@@ -120,10 +128,12 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 	// GitHub Copilot (OAuth)
 	// Tests both Google and Anthropic models via Copilot
+	// 同一网关覆盖不同上游模型族，防止溢出识别只适配某一种后端错误文本。
 	// =============================================================================
 
 	describe("GitHub Copilot (OAuth)", () => {
 		// Google model via Copilot
+		// 验证 Copilot 转发 Google 模型时暴露的网关错误格式。
 		it.skipIf(!githubCopilotToken)(
 			"gemini-2.5-pro - should detect overflow via isContextOverflow",
 			async () => {
@@ -139,6 +149,7 @@ describe("Context overflow error handling", () => {
 		);
 
 		// Anthropic model via Copilot
+		// 验证同一 Copilot 协议下 Anthropic 模型可能返回另一组错误措辞。
 		it.skipIf(!githubCopilotToken)(
 			"claude-sonnet-4 - should detect overflow via isContextOverflow",
 			async () => {
@@ -157,6 +168,7 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 	// OpenAI
 	// Expected pattern: "exceeds the context window"
+	// 分别覆盖 Completions 与 Responses 适配层，避免协议差异破坏统一检测。
 	// =============================================================================
 
 	describe.skipIf(!process.env.OPENAI_API_KEY)("OpenAI Completions", () => {
@@ -199,6 +211,7 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 	// Google
 	// Expected pattern: "input token count (X) exceeds the maximum"
+	// 此断言固定 Google 原生错误的关键结构，而不依赖具体 token 数值。
 	// =============================================================================
 
 	describe.skipIf(!process.env.GEMINI_API_KEY)("Google", () => {
@@ -215,6 +228,7 @@ describe("Context overflow error handling", () => {
 
 	// =============================================================================
 	// Uses same API as Google, expects same error pattern
+	// 共用 Google API 的 provider 应继承相同的溢出错误识别规则。
 	// =============================================================================
 
 	// =============================================================================
@@ -223,6 +237,7 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 	// OpenAI Codex (OAuth)
 	// Uses ChatGPT Plus/Pro subscription via OAuth
+	// 该路径验证订阅 OAuth 认证不会改变上下文溢出的标准化结果。
 	// =============================================================================
 
 	describe("OpenAI Codex (OAuth)", () => {
@@ -243,6 +258,7 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 	// Amazon Bedrock
 	// Expected pattern: "Input is too long for requested model"
+	// Bedrock 用空 apiKey 调用，以覆盖其环境凭据链而非 API key 认证路径。
 	// =============================================================================
 
 	describe.skipIf(!hasBedrockCredentials())("Amazon Bedrock", () => {
@@ -293,6 +309,7 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 	// Cerebras
 	// Expected: 400/413 status code with no body
+	// Cerebras 的回归边界是仅凭无响应体的 HTTP 状态仍能识别溢出。
 	// =============================================================================
 
 	describe.skipIf(!process.env.CEREBRAS_API_KEY)("Cerebras", () => {
@@ -310,6 +327,7 @@ describe("Context overflow error handling", () => {
 
 			expect(result.stopReason).toBe("error");
 			// Cerebras returns status code with no body (400, 413, or 429 for token rate limit)
+			// 允许 429 是因为超大输入也可能先触发 token 速率限制，仍需保留诊断信息。
 			expect(result.errorMessage).toMatch(/4(00|13|29).*\(no body\)/i);
 			expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
 		}, 120000);
@@ -318,6 +336,7 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 	// Hugging Face
 	// Uses OpenAI-compatible Inference Router
+	// 验证 OpenAI-compatible 路由层仍能被统一检测，而不要求原生 provider 错误格式。
 	// =============================================================================
 
 	describe.skipIf(!process.env.HF_TOKEN)("Hugging Face", () => {
@@ -334,6 +353,7 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 	// Together AI
 	// Uses OpenAI-compatible Chat Completions API
+	// 与其他 OpenAI-compatible 实现并列覆盖，防止兼容协议被误当作完全相同的错误文本。
 	// =============================================================================
 
 	describe.skipIf(!process.env.TOGETHER_API_KEY)("Together AI", () => {
@@ -351,6 +371,7 @@ describe("Context overflow error handling", () => {
 	// z.ai
 	// Special case: may return explicit overflow error text, may accept overflow silently,
 	// or may rate limit instead
+	// 该矩阵接受显式错误、静默接受和限流三种服务端结果，只在存在可靠信号时断言溢出。
 	// =============================================================================
 
 	describe.skipIf(!process.env.ZAI_API_KEY)("z.ai", () => {
@@ -363,6 +384,7 @@ describe("Context overflow error handling", () => {
 			// - Sometimes returns explicit overflow error text via non-standard finish_reason handling
 			// - Sometimes accepts overflow and returns successfully with usage.input > contextWindow
 			// - Sometimes returns rate limit error
+			// 分支断言刻意避免把限流误判为溢出，同时保留 usage 超窗这一非错误检测路径。
 			if (result.stopReason === "error") {
 				if (result.errorMessage?.match(/model_context_window_exceeded/i)) {
 					expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
@@ -398,6 +420,7 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 	// MiniMax
 	// Expected pattern: TBD - need to test actual error message
+	// 在服务端错误文本尚未稳定前，仅固定标准化 stopReason 与检测器结果。
 	// =============================================================================
 
 	describe.skipIf(!process.env.MINIMAX_API_KEY)("MiniMax", () => {
@@ -419,6 +442,7 @@ describe("Context overflow error handling", () => {
 		// Xiaomi silently truncates oversized input to fill the context window exactly,
 		// then returns finish_reason "length" with output=0 (no room left to generate).
 		// This is a detectable overflow signal but uses stopReason "length" rather than "error".
+		// 四种计费入口共享这一回归边界：窗口被填满且无输出时，length 也应判定为溢出。
 		it("mimo-v2.5-pro - should detect overflow via isContextOverflow", async () => {
 			const model = getModel("xiaomi", "mimo-v2.5-pro");
 			const result = await testContextOverflow(model, process.env.XIAOMI_API_KEY!);
@@ -483,6 +507,7 @@ describe("Context overflow error handling", () => {
 
 	// =============================================================================
 	// Vercel AI Gateway - Unified API for multiple providers
+	// 网关用例验证转发层返回的结果仍满足统一检测契约。
 	// =============================================================================
 
 	describe.skipIf(!process.env.AI_GATEWAY_API_KEY)("Vercel AI Gateway", () => {
@@ -499,6 +524,7 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 	// OpenRouter - Multiple backend providers
 	// Expected pattern: "maximum context length is X tokens"
+	// 多后端矩阵确保 OpenRouter 的统一错误外观对不同上游模型族都可识别。
 	// =============================================================================
 
 	describe.skipIf(!process.env.OPENROUTER_API_KEY)("OpenRouter", () => {
@@ -563,6 +589,7 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 
 	// Check if ollama is installed and local LLM tests are enabled
+	// 本地场景同时受显式开关和可执行文件探测控制，避免默认测试隐式安装或启动依赖。
 	let ollamaInstalled = false;
 	if (!process.env.PI_NO_LOCAL_LLM) {
 		try {
@@ -579,6 +606,7 @@ describe("Context overflow error handling", () => {
 
 		beforeAll(async () => {
 			// Check if model is available, if not pull it
+			// 仅在启用本地 LLM 测试后补齐模型，避免远端 provider 矩阵承担本地资源成本。
 			try {
 				execSync("ollama list | grep -q 'gpt-oss:20b'", { stdio: "ignore" });
 			} catch {
@@ -592,12 +620,14 @@ describe("Context overflow error handling", () => {
 			}
 
 			// Start ollama server
+			// 测试自行持有服务进程，并在 afterAll 中终止，隔离本地运行时生命周期。
 			ollamaProcess = spawn("ollama", ["serve"], {
 				detached: false,
 				stdio: "ignore",
 			});
 
 			// Wait for server to be ready
+			// 轮询实际 HTTP 端点而不是依赖固定启动延迟，减少慢机器上的竞态。
 			await new Promise<void>((resolve) => {
 				const checkServer = async () => {
 					try {
@@ -642,11 +672,14 @@ describe("Context overflow error handling", () => {
 			// Ollama silently truncates input instead of erroring
 			// It returns stopReason "stop" with truncated usage
 			// We cannot detect overflow via error message, only via usage comparison
+			// 此用例记录静默截断的已知限制；只有服务端明确报错时才强制检测器返回 true。
 			if (result.stopReason === "stop" && result.hasUsageData) {
 				// Ollama truncated - check if reported usage is less than what we sent
 				// This is a "silent overflow" - we can detect it if we know expected input size
+				// 当前 helper 未保留预计输入 token 数，因此这里只输出诊断信息而不制造脆弱断言。
 				console.log("  Ollama silently truncated input to", result.usage.input, "tokens");
 				// For now, we accept this behavior - Ollama doesn't give us a way to detect overflow
+				// 接受该结果是显式记录能力边界，并非把静默截断视为标准成功行为。
 			} else if (result.stopReason === "error") {
 				expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
 			}
@@ -655,6 +688,7 @@ describe("Context overflow error handling", () => {
 
 	// =============================================================================
 	// LM Studio (local) - Skip if not running or local LLM tests disabled
+	// LM Studio 由用户预先启动，测试只探测可用性，不接管外部进程生命周期。
 	// =============================================================================
 
 	let lmStudioRunning = false;
@@ -692,6 +726,7 @@ describe("Context overflow error handling", () => {
 
 	// =============================================================================
 	// llama.cpp server (local) - Skip if not running or not exposing /v1/completions
+	// 除健康检查外还探测目标协议端点，避免把仅启动但不兼容的服务纳入矩阵。
 	// =============================================================================
 
 	let llamaCppRunning = false;
@@ -711,6 +746,7 @@ describe("Context overflow error handling", () => {
 	describe.skipIf(!llamaCppRunning)("llama.cpp (local)", () => {
 		it("should detect overflow via isContextOverflow", async () => {
 			// Using small context (4096) to match server --ctx-size setting
+			// 测试模型窗口必须与服务启动参数一致，否则可能测到客户端元数据与服务配置不匹配。
 			const model: Model<"openai-completions"> = {
 				id: "local-model",
 				api: "openai-completions",

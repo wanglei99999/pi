@@ -255,10 +255,15 @@ function formatValidationPath(error: TLocalizedValidationError): string {
 
 /**
  * Finds a tool by name and validates the tool call arguments against its TypeBox schema
+ * 按名称查找工具，并依据其 TypeBox 架构验证工具调用参数。
  * @param tools Array of tool definitions
+ *   工具定义数组
  * @param toolCall The tool call from the LLM
+ *   LLM 发出的工具调用
  * @returns The validated arguments
+ *   验证后的参数
  * @throws Error if tool is not found or validation fails
+ *   找不到工具或验证失败时抛出错误
  */
 export function validateToolCall(tools: Tool[], toolCall: ToolCall): any {
 	const tool = tools.find((t) => t.name === toolCall.name);
@@ -270,10 +275,15 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): any {
 
 /**
  * Validates tool call arguments against the tool's TypeBox schema
+ * 依据工具的 TypeBox 架构验证工具调用参数。
  * @param tool The tool definition with TypeBox schema
+ *   带有 TypeBox 架构的工具定义
  * @param toolCall The tool call from the LLM
+ *   LLM 发出的工具调用
  * @returns The validated (and potentially coerced) arguments
+ *   验证后的参数（可能已经过类型转换）
  * @throws Error with formatted message if validation fails
+ *   验证失败时抛出包含格式化消息的错误
  */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
 	const args = structuredClone(toolCall.arguments);

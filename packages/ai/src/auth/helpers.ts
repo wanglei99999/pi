@@ -5,6 +5,8 @@ import type { ApiKeyAuth, OAuthAuth } from "./types.ts";
  * set env var resolves. Includes a `login` that prompts for the key.
  * Providers with non-standard resolution (provider env, ambient files, IAM)
  * write their own `ApiKeyAuth`.
+ * 标准 API key 认证优先使用已保存凭据，否则按顺序读取首个有效环境变量，并提供交互式登录。
+ * 依赖提供商环境、外部凭据文件或 IAM 的特殊来源应自行实现 `ApiKeyAuth`。
  */
 export function envApiKeyAuth(name: string, envVars: readonly string[]): ApiKeyAuth {
 	return {
@@ -30,6 +32,8 @@ export function envApiKeyAuth(name: string, envVars: readonly string[]): ApiKeyA
  * first `login`/`refresh`/`toAuth` call; callers keep Node-only flow code out
  * of bundles by loading through a bundler-opaque dynamic import (variable
  * specifier, see the bedrock lazy wrapper).
+ * 延迟包装使提供商可以声明 OAuth 能力而不立即加载实现；首次 login、refresh 或 toAuth 时才加载。
+ * 这样浏览器等 bundle 不会意外包含仅限 Node 的授权流程，且所有入口共享同一个加载 Promise。
  */
 export function lazyOAuth(input: { name: string; load: () => Promise<OAuthAuth> }): OAuthAuth {
 	let promise: Promise<OAuthAuth> | undefined;

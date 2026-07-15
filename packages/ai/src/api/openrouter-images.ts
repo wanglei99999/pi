@@ -41,6 +41,8 @@ export const generateImages: ImagesFunction<"openrouter-images", ImagesOptions> 
 	context: ImagesContext,
 	options?: ImagesOptions,
 ) => {
+	// Keep image generation on the non-streaming chat endpoint because OpenRouter returns images on the final message.
+	// 图片生成使用非流式 chat 端点，因为 OpenRouter 只在最终 message 中返回图片。
 	const output: AssistantImages = {
 		api: model.api,
 		provider: model.provider,
@@ -58,6 +60,8 @@ export const generateImages: ImagesFunction<"openrouter-images", ImagesOptions> 
 		const client = createClient(model, apiKey, options?.headers);
 		let params = buildParams(model, context);
 		const nextParams = await options?.onPayload?.(params, model);
+		// Treat the payload hook result as a complete replacement so callers can adapt gateway-specific fields.
+		// 将 payload hook 的结果视为完整替换，便于调用方适配 Gateway 专用字段。
 		if (nextParams !== undefined) {
 			params = nextParams as typeof params;
 		}
@@ -78,6 +82,8 @@ export const generateImages: ImagesFunction<"openrouter-images", ImagesOptions> 
 		}
 
 		const choice = imageResponse.choices[0];
+		// Preserve optional explanatory text before collecting generated data-URL images.
+		// 先保留可选说明文本，再收集生成的 data URL 图片。
 		if (choice) {
 			const content = choice.message.content;
 			if (typeof content === "string" && content.length > 0) {
@@ -85,6 +91,8 @@ export const generateImages: ImagesFunction<"openrouter-images", ImagesOptions> 
 			}
 
 			for (const image of choice.message.images ?? []) {
+				// Only inline base64 data URLs can be represented by the provider-neutral ImageContent type.
+				// 只有内联 base64 data URL 能转换为提供商无关的 ImageContent。
 				const imageUrl = typeof image.image_url === "string" ? image.image_url : image.image_url?.url;
 				if (!imageUrl?.startsWith("data:")) continue;
 				const matches = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
@@ -123,6 +131,8 @@ type OpenRouterImagesCreateParams = Omit<ChatCompletionCreateParamsNonStreaming,
 };
 
 function buildParams(model: ImagesModel<"openrouter-images">, context: ImagesContext): OpenRouterImagesCreateParams {
+	// Encode all prompt parts as one user message while preserving text/image order.
+	// 将所有提示部分编码到同一条 user message 中，并保持文本与图片的原始顺序。
 	const content: ChatCompletionContentPart[] = context.input.map((item): ChatCompletionContentPart => {
 		if (item.type === "text") {
 			return {
@@ -159,6 +169,8 @@ function parseUsage(
 	},
 	model: ImagesModel<"openrouter-images">,
 ) {
+	// Some gateways include cache writes inside cached_tokens, so subtract writes before deriving cache reads.
+	// 部分 Gateway 会把 cache write 计入 cached_tokens，因此先扣除写入量再计算 cache read。
 	const promptTokens = rawUsage.prompt_tokens || 0;
 	const reportedCachedTokens = rawUsage.prompt_tokens_details?.cached_tokens || 0;
 	const cacheWriteTokens = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
@@ -167,6 +179,8 @@ function parseUsage(
 	const input = Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens);
 	const output = rawUsage.completion_tokens || 0;
 	const usage = {
+		// Reconstruct totals from normalized buckets to avoid double-counting provider-specific cache fields.
+		// 使用规范化后的各项重新计算总量，避免提供商缓存字段被重复计数。
 		input,
 		output,
 		cacheRead: cacheReadTokens,

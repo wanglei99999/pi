@@ -32,6 +32,9 @@ import type { AssistantMessage } from "../types.ts";
  *   with output=0 (no room left to generate). Detected via stopReason "length" + zero output +
  *   input filling the context window.
  * - Ollama: Some deployments truncate silently, others return errors like "prompt too long; exceeded max context length by X tokens"
+ *
+ * 汇总不同提供商的上下文溢出错误模式。具体错误文本保持原样，匹配规则既包含提供商专用特征，
+ * 也包含少量通用回退模式；新增模式时需避免把限流或服务故障误判为上下文过长。
  */
 const OVERFLOW_PATTERNS = [
 	/prompt is too long/i, // Anthropic token overflow
@@ -68,6 +71,8 @@ const OVERFLOW_PATTERNS = [
  * Example: Bedrock formats throttling errors as "ThrottlingException: Too many tokens,
  * please wait before trying again." which would match the /too many tokens/i overflow
  * pattern without this exclusion.
+ *
+ * 这些排除模式优先于溢出模式，用于消除诸如 “Too many tokens” 同时可能表示限流的歧义。
  */
 const NON_OVERFLOW_PATTERNS = [
 	/^(Throttling error|Service unavailable):/i, // AWS Bedrock non-overflow errors (human-readable prefixes from formatBedrockError)
@@ -125,11 +130,17 @@ const NON_OVERFLOW_PATTERNS = [
  * @param message - The assistant message to check
  * @param contextWindow - Optional context window size for detecting silent overflow (z.ai)
  * @returns true if the message indicates a context overflow
+ *
+ * 综合三类信号判断上下文溢出：明确错误文本、成功响应但输入用量超过窗口，以及服务端截断输入后
+ * 以 length 结束且没有输出。后两类检测必须传入 contextWindow，避免仅凭用量猜测。
+ * 自定义提供商若错误格式不同，应先采集真实 errorMessage 再增加足够具体的模式。
  */
 export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
 	// Case 1: Check error message patterns
+	// 情形一：从错误消息匹配明确的溢出特征。
 	if (message.stopReason === "error" && message.errorMessage) {
 		// Skip messages matching known non-overflow patterns (e.g. throttling / rate-limit)
+		// 已知限流或服务故障模式具有更高优先级，命中后不再按溢出处理。
 		const isNonOverflow = NON_OVERFLOW_PATTERNS.some((p) => p.test(message.errorMessage!));
 		if (!isNonOverflow && OVERFLOW_PATTERNS.some((p) => p.test(message.errorMessage!))) {
 			return true;
@@ -137,6 +148,7 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 	}
 
 	// Case 2: Silent overflow (z.ai style) - successful but usage exceeds context
+	// 情形二：请求表面成功，但输入与缓存读取用量之和已经超过上下文窗口。
 	if (contextWindow && message.stopReason === "stop") {
 		const inputTokens = message.usage.input + message.usage.cacheRead;
 		if (inputTokens > contextWindow) {
@@ -147,6 +159,7 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 	// Case 3: Length-stop overflow (Xiaomi MiMo style) - server truncates oversized input
 	// to fit the context window, leaving no room for output. Returns stopReason "length"
 	// with output=0 and input+cacheRead filling the context window.
+	// 情形三：服务端把超长输入截到窗口上限，导致没有生成空间；使用 99% 阈值容忍令牌统计误差。
 	if (contextWindow && message.stopReason === "length" && message.usage.output === 0) {
 		const inputTokens = message.usage.input + message.usage.cacheRead;
 		if (inputTokens >= contextWindow * 0.99) {
@@ -159,6 +172,7 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 
 /**
  * Get the overflow patterns for testing purposes.
+ * 返回模式副本供测试验证，避免测试代码修改运行时共享数组。
  */
 export function getOverflowPatterns(): RegExp[] {
 	return [...OVERFLOW_PATTERNS];

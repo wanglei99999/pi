@@ -21,6 +21,7 @@ import { buildBaseOptions } from "./simple-options.ts";
 const DEFAULT_AZURE_API_VERSION = "v1";
 const AZURE_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]);
 // OpenAI Responses rejects max_output_tokens below 16: https://github.com/earendil-works/pi/issues/6265
+// OpenAI Responses 会拒绝小于 16 的 max_output_tokens，相关背景见上述 issue。
 const OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = 16;
 
 function parseDeploymentNameMap(value: string | undefined): Map<string, string> {
@@ -51,6 +52,7 @@ function formatAzureOpenAIError(error: unknown): string {
 }
 
 // Azure OpenAI Responses-specific options
+// Azure OpenAI Responses 专用选项。
 export interface AzureOpenAIResponsesOptions extends StreamOptions {
 	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
@@ -63,6 +65,9 @@ export interface AzureOpenAIResponsesOptions extends StreamOptions {
 /**
  * Generate function for Azure OpenAI Responses API
  */
+/**
+ * Azure OpenAI Responses API 的流式生成函数。
+ */
 export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIResponsesOptions> = (
 	model: Model<"azure-openai-responses">,
 	context: Context,
@@ -71,6 +76,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 	const stream = new AssistantMessageEventStream();
 
 	// Start async processing
+	// 在不阻塞调用方返回事件流的前提下启动异步请求处理。
 	(async () => {
 		const deploymentName = resolveDeploymentName(model, options);
 
@@ -94,6 +100,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 
 		try {
 			// Create Azure OpenAI client
+			// 根据已解析的 Azure 配置创建 OpenAI 客户端。
 			const apiKey = options?.apiKey;
 			if (!apiKey) {
 				throw new Error(`No API key for provider: ${model.provider}`);
@@ -129,6 +136,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 			for (const block of output.content) {
 				delete (block as { index?: number }).index;
 				// partialJson is only a streaming scratch buffer; never persist it.
+				// partialJson 仅用于流式处理期间的暂存，错误输出中也不能持久化。
 				delete (block as { partialJson?: string }).partialJson;
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
@@ -178,6 +186,8 @@ function normalizeAzureBaseUrl(baseUrl: string): string {
 
 	// Ensure Azure hosts have /openai/v1 as base path so the AzureOpenAI SDK
 	// can append /deployments/<model>/... and ?api-version=v1 correctly.
+	// 确保 Azure 主机以 /openai/v1 为基础路径，使 AzureOpenAI SDK 能正确追加
+	// /deployments/<model>/... 和 ?api-version=v1。
 	if (
 		isAzureHost &&
 		(normalizedPath === "" ||

@@ -1,3 +1,4 @@
+// 用于缩短长字符串的快速确定性哈希；不提供密码学安全保证。
 /** Fast deterministic hash to shorten long strings */
 export function shortHash(str: string): string {
 	let h1 = 0xdeadbeef;

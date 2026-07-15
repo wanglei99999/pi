@@ -1,8 +1,11 @@
 /**
  * Anthropic OAuth flow (Claude Pro/Max)
+ * Anthropic OAuth 流程（Claude Pro/Max）。
  *
  * NOTE: This module uses Node.js http.createServer for the OAuth callback server.
+ * 注意：此模块使用 Node.js http.createServer 承载 OAuth 回调服务器。
  * It is only intended for CLI use, not browser environments.
+ * 它仅面向 CLI 使用，不适用于浏览器环境。
  */
 
 import type { Server } from "node:http";
@@ -39,6 +42,7 @@ const SCOPES =
 async function getNodeApis(): Promise<NodeApis> {
 	if (nodeApis) return nodeApis;
 	if (!nodeApisPromise) {
+		// 延迟加载 Node API，使模块本身仍可被非 Node 环境安全解析；共享 Promise 可避免并发初始化重复导入。
 		if (typeof process === "undefined" || (!process.versions?.node && !process.versions?.bun)) {
 			throw new Error("Anthropic OAuth is only available in Node.js environments");
 		}
@@ -62,6 +66,7 @@ function parseAuthorizationInput(input: string): { code?: string; state?: string
 		};
 	} catch {
 		// not a URL
+		// 输入不是 URL，继续尝试授权码、片段或查询参数格式。
 	}
 
 	if (value.includes("#")) {
@@ -103,6 +108,7 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
 	return new Promise((resolve, reject) => {
 		let settleWait: ((value: { code: string; state: string } | null) => void) | undefined;
 		const waitForCodePromise = new Promise<{ code: string; state: string } | null>((resolveWait) => {
+			// 浏览器回调与手动输入存在竞态，因此结算函数必须保证只完成一次。
 			let settled = false;
 			settleWait = (value) => {
 				if (settled) return;
@@ -222,12 +228,14 @@ async function exchangeAuthorizationCode(
 	return {
 		refresh: tokenData.refresh_token,
 		access: tokenData.access_token,
+		// 提前五分钟视为过期，避免请求途中令牌恰好失效。
 		expires: Date.now() + tokenData.expires_in * 1000 - 5 * 60 * 1000,
 	};
 }
 
 /**
  * Login with Anthropic OAuth (authorization code + PKCE)
+ * 使用 Anthropic OAuth（授权码 + PKCE）登录。
  */
 export async function loginAnthropic(options: {
 	onAuth: (info: { url: string; instructions?: string }) => void;
@@ -236,6 +244,7 @@ export async function loginAnthropic(options: {
 	onManualCodeInput?: () => Promise<string>;
 }): Promise<OAuthCredentials> {
 	const { verifier, challenge } = await generatePKCE();
+	// verifier 同时作为 PKCE 校验值和 OAuth state，使回调来源校验与令牌交换使用同一份随机秘密。
 	const server = await startCallbackServer(verifier);
 
 	let code: string | undefined;
@@ -261,6 +270,7 @@ export async function loginAnthropic(options: {
 		});
 
 		if (options.onManualCodeInput) {
+			// 手动输入与本地回调并行等待，任一路径完成都会取消另一条等待路径。
 			let manualInput: string | undefined;
 			let manualError: Error | undefined;
 			const manualPromise = options
@@ -340,12 +350,14 @@ export async function loginAnthropic(options: {
 		options.onProgress?.("Exchanging authorization code for tokens...");
 		return exchangeAuthorizationCode(code, state, verifier, redirectUriForExchange);
 	} finally {
+		// 无论认证、解析还是令牌交换是否成功，都必须释放固定回调端口。
 		server.server.close();
 	}
 }
 
 /**
  * Refresh Anthropic OAuth token
+ * 刷新 Anthropic OAuth 令牌。
  */
 export async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
 	let responseBody: string;
@@ -376,6 +388,7 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
 	return {
 		refresh: data.refresh_token,
 		access: data.access_token,
+		// 与首次交换保持相同的提前过期窗口，防止刷新后的令牌在请求期间失效。
 		expires: Date.now() + data.expires_in * 1000 - 5 * 60 * 1000,
 	};
 }
@@ -386,6 +399,8 @@ export const anthropicOAuth: OAuthAuth = {
 	async login(callbacks) {
 		// The manual_code prompt races the local callback server; abort it once
 		// the flow settles so the UI can dismiss the pending input.
+		// manual_code 提示与本地回调服务器并行竞争；流程结束后中止提示，
+		// 以便 UI 关闭仍在等待的输入框。
 		const manualAbort = new AbortController();
 		try {
 			const credentials = await loginAnthropic({

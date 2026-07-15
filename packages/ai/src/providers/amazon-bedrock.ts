@@ -7,6 +7,8 @@ import { AMAZON_BEDROCK_MODELS } from "./amazon-bedrock.models.ts";
  * Bedrock auth is ambient: the AWS SDK's default credential chain handles the
  * actual signing, so `resolve` only reports whether the provider is
  * configured. A stored credential key is surfaced as the bearer token.
+ * Bedrock 使用环境凭据：实际签名由 AWS SDK 默认凭据链完成，因此 `resolve` 只判断提供商是否已配置。
+ * 已保存的 credential key 会作为 bearer token 暴露；其他来源仅返回来源信息，不复制敏感凭据。
  */
 const bedrockAuth: ApiKeyAuth = {
 	name: "AWS credentials",

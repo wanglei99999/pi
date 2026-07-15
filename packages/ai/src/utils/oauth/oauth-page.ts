@@ -1,6 +1,7 @@
 const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" aria-hidden="true"><path fill="#fff" fill-rule="evenodd" d="M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z"/><path fill="#fff" d="M517.36 400 H634.72 V634.72 H517.36 Z"/></svg>`;
 
 function escapeHtml(value: string): string {
+	// 所有调用方提供的文本在插入模板前统一转义，防止 OAuth 回调参数形成 HTML 注入。
 	return value
 		.replaceAll("&", "&amp;")
 		.replaceAll("<", "&lt;")
@@ -10,6 +11,7 @@ function escapeHtml(value: string): string {
 }
 
 function renderPage(options: { title: string; heading: string; message: string; details?: string }): string {
+	// LOGO_SVG 与页面骨架是受信任静态内容；只有经过 escapeHtml 的动态文本可以进入模板。
 	const title = escapeHtml(options.title);
 	const heading = escapeHtml(options.heading);
 	const message = escapeHtml(options.message);
@@ -92,6 +94,7 @@ function renderPage(options: { title: string; heading: string; message: string; 
 }
 
 export function oauthSuccessHtml(message: string): string {
+	// 成功与失败页面共享同一渲染入口，确保安全转义和视觉结构保持一致。
 	return renderPage({
 		title: "Authentication successful",
 		heading: "Authentication successful",
@@ -100,6 +103,7 @@ export function oauthSuccessHtml(message: string): string {
 }
 
 export function oauthErrorHtml(message: string, details?: string): string {
+	// details 仅作为已转义的纯文本展示，保留换行但不会被解释为 HTML。
 	return renderPage({
 		title: "Authentication failed",
 		heading: "Authentication failed",

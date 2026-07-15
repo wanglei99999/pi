@@ -33,6 +33,7 @@ const MAX_MISTRAL_ERROR_BODY_CHARS = 4000;
 
 /**
  * Provider-specific options for the Mistral API.
+ * Mistral API 的提供商专用选项。
  */
 type MistralReasoningEffort = "none" | "high";
 
@@ -44,6 +45,7 @@ export interface MistralOptions extends StreamOptions {
 
 /**
  * Stream responses from Mistral using `chat.stream`.
+ * 通过 `chat.stream` 流式接收 Mistral 响应。
  */
 export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 	model: Model<"mistral-conversations">,
@@ -62,6 +64,7 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 			}
 
 			// Intentionally per-request: avoids shared SDK mutable state across concurrent consumers.
+			// 每个请求独立创建客户端，避免并发调用方共享 SDK 的可变状态。
 			const mistral = new Mistral({
 				apiKey,
 				serverURL: model.baseUrl,
@@ -92,6 +95,7 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 		} catch (error) {
 			for (const block of output.content) {
 				// partialArgs is only a streaming scratch buffer; never persist it.
+				// partialArgs 只用于拼接流式参数，错误路径也不能把它持久化到消息中。
 				delete (block as { partialArgs?: string }).partialArgs;
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
@@ -106,6 +110,7 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 
 /**
  * Maps provider-agnostic `SimpleStreamOptions` to Mistral options.
+ * 将与提供商无关的 `SimpleStreamOptions` 映射为 Mistral 选项。
  */
 export const streamSimple: StreamFunction<"mistral-conversations", SimpleStreamOptions> = (
 	model: Model<"mistral-conversations">,
@@ -151,6 +156,7 @@ function createOutput(model: Model<"mistral-conversations">): AssistantMessage {
 }
 
 function createMistralToolCallIdNormalizer(): (id: string) => string {
+	// Mistral 要求工具调用 ID 固定为 9 个字母数字字符；双向映射用于稳定复用并检测碰撞。
 	const idMap = new Map<string, string>();
 	const reverseMap = new Map<string, string>();
 
@@ -167,6 +173,7 @@ function createMistralToolCallIdNormalizer(): (id: string) => string {
 				reverseMap.set(candidate, id);
 				return candidate;
 			}
+			// 哈希碰撞时加入递增盐值重试，确保同一请求内不同原始 ID 不会合并。
 			attempt++;
 		}
 	};
@@ -225,7 +232,9 @@ function buildRequestOptions(model: Model<"mistral-conversations">, options?: Mi
 	if (options?.headers) Object.assign(headers, options.headers);
 
 	// Mistral infrastructure uses `x-affinity` for KV-cache reuse (prefix caching).
+	// Mistral 基础设施通过 `x-affinity` 复用 KV cache（前缀缓存）。
 	// Respect explicit caller-provided header values.
+	// 调用方显式提供的 header 优先，sessionId 只用于补充缺省值。
 	if (shouldUsePromptCaching(options) && !headers["x-affinity"]) {
 		headers["x-affinity"] = options.sessionId;
 	}
@@ -255,6 +264,7 @@ function buildChatPayload(
 	if (options?.toolChoice) payload.toolChoice = mapToolChoice(options.toolChoice);
 	if (options?.promptMode) payload.promptMode = options.promptMode;
 	if (options?.reasoningEffort) payload.reasoningEffort = options.reasoningEffort;
+	// 请求体和 `x-affinity` 使用同一 sessionId，使服务端提示缓存与会话亲和性保持一致。
 	if (shouldUsePromptCaching(options)) payload.promptCacheKey = options.sessionId;
 
 	if (context.systemPrompt) {
@@ -272,6 +282,7 @@ function shouldUsePromptCaching(options?: MistralOptions): options is MistralOpt
 }
 
 function getMistralCachedPromptTokens(usage: unknown, promptTokens: number): number {
+	// SDK 与不同网关可能返回 camelCase、snake_case 或历史字段名，统一兼容后再计费。
 	const rawUsage = usage as {
 		promptTokensDetails?: { cachedTokens?: unknown } | null;
 		prompt_tokens_details?: { cached_tokens?: unknown } | null;
@@ -328,6 +339,7 @@ async function consumeChatStream(
 		const chunk = event.data;
 		// Mistral's streamed CompletionChunk carries an id field. Keep the first non-empty one,
 		// mirroring how OpenAI-style streaming exposes a stable response identifier per stream.
+		// 流中只保留首个非空 ID，以获得与 OpenAI 风格接口一致的稳定响应标识。
 		output.responseId ||= chunk.id;
 
 		if (chunk.usage) {
@@ -417,6 +429,7 @@ async function consumeChatStream(
 
 		const toolCalls = delta.toolCalls || [];
 		for (const toolCall of toolCalls) {
+			// 工具调用与文本/思考块互斥推进，切换类型前先结束当前内容块。
 			if (currentBlock) {
 				finishCurrentBlock(currentBlock);
 				currentBlock = null;
@@ -454,6 +467,7 @@ async function consumeChatStream(
 					? toolCall.function.arguments
 					: JSON.stringify(toolCall.function.arguments || {});
 			block.partialArgs = (block.partialArgs || "") + argsDelta;
+			// 每个 delta 都解析当前最佳结果，便于 UI 在 JSON 尚未完整时展示增量状态。
 			block.arguments = parseStreamingJson<Record<string, unknown>>(block.partialArgs);
 			stream.push({
 				type: "toolcall_delta",
@@ -472,6 +486,7 @@ async function consumeChatStream(
 		toolBlock.arguments = parseStreamingJson<Record<string, unknown>>(toolBlock.partialArgs);
 		// Finalize in-place and strip the scratch buffer so replay only
 		// carries parsed arguments.
+		// 就地完成工具调用并移除暂存字符串，使回放消息只携带解析后的参数。
 		delete toolBlock.partialArgs;
 		stream.push({
 			type: "toolcall_end",
@@ -531,6 +546,7 @@ function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompl
 				continue;
 			}
 			if (hadImages && !supportsImages) {
+				// 保留一条占位消息，避免仅含图片的用户轮次在降级后完全消失。
 				result.push({ role: "user", content: "(image omitted: model does not support images)" });
 			}
 			continue;
@@ -619,6 +635,7 @@ function buildToolResultText(text: string, hasImages: boolean, supportsImages: b
 }
 
 function usesReasoningEffort(model: Model<"mistral-conversations">): boolean {
+	// 新版部分模型使用 reasoningEffort；其余推理模型仍通过 promptMode 启用推理。
 	return model.id === "mistral-small-2603" || model.id === "mistral-small-latest" || model.id === "mistral-medium-3.5";
 }
 

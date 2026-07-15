@@ -4,8 +4,10 @@ const SLOW_DOWN_TIMEOUT_MESSAGE =
 	"Device flow timed out after one or more slow_down responses. This is often caused by clock drift in WSL or VM environments. Please sync or restart the VM clock and try again.";
 const MINIMUM_INTERVAL_MS = 1000;
 // RFC 8628 section 3.2: if the authorization server omits `interval`, the client must use 5 seconds.
+// RFC 8628 第 3.2 节规定：授权服务器省略 `interval` 时，客户端必须使用 5 秒。
 const DEFAULT_POLL_INTERVAL_SECONDS = 5;
 // RFC 8628 section 3.5: `slow_down` means the polling interval must increase by 5 seconds.
+// RFC 8628 第 3.5 节规定：收到 `slow_down` 后轮询间隔必须增加 5 秒。
 const SLOW_DOWN_INTERVAL_INCREMENT_MS = 5000;
 
 type OAuthDeviceCodeIncompletePollResult =
@@ -24,6 +26,7 @@ export type OAuthDeviceCodePollOptions<T> = {
 };
 
 function abortableSleep(ms: number, signal: AbortSignal | undefined, cancelMessage: string): Promise<void> {
+	// 睡眠与 AbortSignal 竞争，任一路径完成后都清理对应的计时器或监听器。
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) {
 			reject(new Error(cancelMessage));
@@ -55,6 +58,7 @@ export async function pollOAuthDeviceCodeFlow<T>(options: OAuthDeviceCodePollOpt
 
 	let slowDownResponses = 0;
 	if (options.waitBeforeFirstPoll) {
+		// 某些设备流要求首次请求前也等待一个轮询周期，同时不能越过凭据截止时间。
 		const remainingMs = deadline - Date.now();
 		if (remainingMs > 0) {
 			await abortableSleep(Math.min(intervalMs, remainingMs), options.signal, CANCEL_MESSAGE);
@@ -78,6 +82,8 @@ export async function pollOAuthDeviceCodeFlow<T>(options: OAuthDeviceCodePollOpt
 			// Use the server-provided interval when given (GitHub reports the new required minimum
 			// in `interval`); trusting only a client-tracked value risks polling early forever under
 			// WSL/VM clock drift. Otherwise apply RFC 8628 section 3.5: increase by 5 seconds.
+			// 服务端给出 interval 时以其为准；只依赖本地累计值会在 WSL/VM 时钟漂移时持续过早轮询。
+			// 未提供时按 RFC 8628 第 3.5 节在当前间隔上增加 5 秒。
 			intervalMs =
 				typeof result.intervalSeconds === "number" &&
 				Number.isFinite(result.intervalSeconds) &&

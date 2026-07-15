@@ -44,6 +44,7 @@ type BuiltinModelApi<
 	TModelId extends keyof (typeof MODELS)[TProvider],
 > = (typeof MODELS)[TProvider][TModelId] extends { api: infer TApi } ? (TApi extends Api ? TApi : never) : never;
 
+// 对生成的内置 catalog 进行类型化读取；类型关系来自 MODELS，而非运行时 provider 探测。
 /** Typed read of the generated built-in catalog. */
 export function getBuiltinModel<TProvider extends KnownProvider, TModelId extends keyof (typeof MODELS)[TProvider]>(
 	provider: TProvider,
@@ -54,6 +55,7 @@ export function getBuiltinModel<TProvider extends KnownProvider, TModelId extend
 }
 
 export function getBuiltinProviders(): KnownProvider[] {
+	// 此列表反映生成 catalog 中实际包含的 provider，与下方运行时 factory 聚合保持职责分离。
 	return Object.keys(MODELS) as KnownProvider[];
 }
 
@@ -66,6 +68,7 @@ export function getBuiltinModels<TProvider extends KnownProvider>(
 		: [];
 }
 
+// 返回全新构造的全部内置 provider，使每个 registry 拥有独立实例而不共享可变状态。
 /** All built-in providers, freshly constructed. */
 export function builtinProviders(): Provider[] {
 	return [
@@ -107,6 +110,7 @@ export function builtinProviders(): Provider[] {
 	];
 }
 
+// 创建一个已注册全部内置 provider 的独立 `Models` collection，并保留传入的构造选项。
 /** A `Models` collection with every built-in provider registered. */
 export function builtinModels(options?: CreateModelsOptions): MutableModels {
 	const models = createModels(options);
@@ -116,11 +120,13 @@ export function builtinModels(options?: CreateModelsOptions): MutableModels {
 	return models;
 }
 
+// 返回全新构造的全部内置图片生成 provider，避免不同 collection 之间共享实例。
 /** All built-in image-generation providers, freshly constructed. */
 export function builtinImagesProviders(): ImagesProvider[] {
 	return [openrouterImagesProvider()];
 }
 
+// 创建一个已注册全部内置图片生成 provider 的独立 `ImagesModels` collection。
 /** An `ImagesModels` collection with every built-in image-generation provider registered. */
 export function builtinImagesModels(options?: CreateModelsOptions): MutableImagesModels {
 	const models = createImagesModels(options);

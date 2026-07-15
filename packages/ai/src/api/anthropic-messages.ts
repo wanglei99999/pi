@@ -42,6 +42,8 @@ import { transformMessages } from "./transform-messages.ts";
 /**
  * Resolve cache retention preference.
  * Defaults to "short" and uses PI_CACHE_RETENTION for backward compatibility.
+ *
+ * 缓存保留策略默认使用 short，并继续读取 PI_CACHE_RETENTION 以兼容旧配置。
  */
 function resolveCacheRetention(cacheRetention?: CacheRetention, env?: ProviderEnv): CacheRetention {
 	if (cacheRetention) {
@@ -70,11 +72,13 @@ function getCacheControl(
 }
 
 // Stealth mode: Mimic Claude Code's tool naming exactly
+// 隐身模式需要严格复用 Claude Code 的工具命名，以匹配其客户端身份特征。
 const claudeCodeVersion = "2.1.75";
 
 // Claude Code 2.x tool names (canonical casing)
 // Source: https://cchistory.mariozechner.at/data/prompts-2.1.11.md
 // To update: https://github.com/badlogic/cchistory
+// 下列名称及大小写是 Claude Code 2.x 的规范形式；来源与更新入口见上述链接。
 const claudeCodeTools = [
 	"Read",
 	"Write",
@@ -98,6 +102,7 @@ const claudeCodeTools = [
 const ccToolLookup = new Map(claudeCodeTools.map((t) => [t.toLowerCase(), t]));
 
 // Convert tool name to CC canonical casing if it matches (case-insensitive)
+// 忽略大小写匹配后，恢复为 Claude Code 的规范工具名；未命中则保留原名。
 const toClaudeCodeName = (name: string) => ccToolLookup.get(name.toLowerCase()) ?? name;
 const fromClaudeCodeName = (name: string, tools?: Tool[]) => {
 	if (tools && tools.length > 0) {
@@ -110,6 +115,8 @@ const fromClaudeCodeName = (name: string, tools?: Tool[]) => {
 
 /**
  * Convert content blocks to Anthropic API format
+ *
+ * 将内部文本/图片内容块转换为 Anthropic API 接受的格式。
  */
 function convertContentBlocks(content: (TextContent | ImageContent)[]):
 	| string
@@ -125,12 +132,14 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 			  }
 	  > {
 	// If only text blocks, return as concatenated string for simplicity
+	// 纯文本内容直接拼成字符串，避免构造不必要的内容块数组。
 	const hasImages = content.some((c) => c.type === "image");
 	if (!hasImages) {
 		return sanitizeSurrogates(content.map((c) => (c as TextContent).text).join("\n"));
 	}
 
 	// If we have images, convert to content block array
+	// 含图片时必须使用内容块数组，以保留每张图片的媒体类型和数据。
 	const blocks = content.map((block) => {
 		if (block.type === "text") {
 			return {
@@ -149,6 +158,7 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 	});
 
 	// If only images (no text), add placeholder text block
+	// 只有图片时补一个文本占位块，确保请求仍包含可接受的文本上下文。
 	const hasText = blocks.some((b) => b.type === "text");
 	if (!hasText) {
 		blocks.unshift({
@@ -187,12 +197,17 @@ export interface AnthropicOptions extends StreamOptions {
 	 * For older models: uses budget-based thinking with thinkingBudgetTokens.
 	 * Default: undefined (thinking is omitted unless `streamSimple()` maps
 	 * a simple reasoning level to this option, or callers set it explicitly).
+	 *
+	 * 启用扩展推理。自适应模型自行决定是否及如何思考，旧模型则使用 thinkingBudgetTokens。
+	 * 默认不启用，除非 streamSimple() 映射了推理级别或调用方显式设置。
 	 */
 	thinkingEnabled?: boolean;
 	/**
 	 * Token budget for extended thinking (older models only).
 	 * Ignored for adaptive thinking models.
 	 * Default: 1024 when `thinkingEnabled` is true and no budget is provided.
+	 *
+	 * 旧模型的扩展推理令牌预算；自适应推理模型会忽略它，未指定时默认 1024。
 	 */
 	thinkingBudgetTokens?: number;
 	/**
@@ -206,6 +221,9 @@ export interface AnthropicOptions extends StreamOptions {
 	 * Ignored for older models.
 	 * Default: omitted unless `streamSimple()` maps a simple reasoning
 	 * level to this option.
+	 *
+	 * 自适应推理模型的投入级别；级别越高，Claude 分配给推理的资源越多。
+	 * 旧模型忽略该选项，默认仅在 streamSimple() 映射简单推理级别时设置。
 	 */
 	effort?: AnthropicEffort;
 	/**
@@ -219,6 +237,9 @@ export interface AnthropicOptions extends StreamOptions {
 	 * is "omitted". We default to "summarized" here to keep behavior consistent
 	 * with older Claude 4 models. Set this explicitly to "omitted" to opt in.
 	 * Default: "summarized" when thinking is enabled.
+	 *
+	 * 控制推理内容是返回摘要还是仅保留加密签名。省略正文可缩短首个文本令牌延迟，
+	 * 但仍能依靠签名维持多轮连续性；启用推理时默认 summarized。
 	 */
 	thinkingDisplay?: AnthropicThinkingDisplay;
 	/**
@@ -226,18 +247,24 @@ export interface AnthropicOptions extends StreamOptions {
 	 * thinking models. Adaptive thinking models have interleaved thinking built in,
 	 * so the header is skipped for them regardless of this setting.
 	 * Default: true.
+	 *
+	 * 非自适应模型是否请求交错推理 beta；自适应模型已内置该能力，因此不会发送该头。默认启用。
 	 */
 	interleavedThinking?: boolean;
 	/**
 	 * Anthropic tool choice behavior. String values map to Anthropic's built-in
 	 * choices; `{ type: "tool", name }` forces a specific tool.
 	 * Default: omitted (Anthropic default behavior, currently equivalent to auto).
+	 *
+	 * 配置 Anthropic 的工具选择行为；对象形式可强制指定工具，省略时沿用服务端默认行为。
 	 */
 	toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
 	/**
 	 * Pre-built Anthropic client instance. When provided, skips internal client
 	 * construction entirely. Use this to inject alternative SDK clients such as
 	 * `AnthropicVertex` that shares the same messaging API.
+	 *
+	 * 注入预构建的 Anthropic 兼容客户端，并完全跳过内部客户端创建，适合 AnthropicVertex 等替代实现。
 	 */
 	client?: Anthropic;
 }
@@ -548,12 +575,14 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					output.responseId = event.message.id;
 					// Capture initial token usage from message_start event
 					// This ensures we have input token counts even if the stream is aborted early
+					// 在 message_start 即记录初始用量，确保流提前中止时仍保留输入令牌统计。
 					output.usage.input = event.message.usage.input_tokens || 0;
 					output.usage.output = event.message.usage.output_tokens || 0;
 					output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
 					output.usage.cacheWrite = event.message.usage.cache_creation_input_tokens || 0;
 					output.usage.cacheWrite1h = event.message.usage.cache_creation?.ephemeral_1h_input_tokens || 0;
 					// Anthropic doesn't provide total_tokens, compute from components
+					// Anthropic 不直接返回 total_tokens，需要按各用量分量汇总。
 					output.usage.totalTokens =
 						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 					calculateCost(model, output.usage);
@@ -668,6 +697,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 							block.arguments = parseStreamingJson(block.partialJson);
 							// Finalize in-place and strip the scratch buffer so replay only
 							// carries parsed arguments.
+							// 原地完成工具调用并删除暂存 JSON，保证重放数据只携带解析后的参数。
 							delete (block as { partialJson?: string }).partialJson;
 							stream.push({
 								type: "toolcall_end",
@@ -687,6 +717,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					}
 					// Only update usage fields if present (not null).
 					// Preserves input_tokens from message_start when proxies omit it in message_delta.
+					// 仅用非空字段更新统计，避免代理在 message_delta 省略字段时覆盖 message_start 的输入令牌数。
 					if (event.usage.input_tokens != null) {
 						output.usage.input = event.usage.input_tokens;
 					}
@@ -702,12 +733,15 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					// Anthropic reports reasoning tokens in `output_tokens_details.thinking_tokens` on the
 					// final message_delta usage (a subset of output_tokens). SDK 0.91.1 omits the field from
 					// its Usage type, so read it through a narrow cast. Verified against the live API.
+					// 推理令牌位于最终 message_delta 的 output_tokens_details.thinking_tokens，且属于 output_tokens 子集；
+					// 当前 SDK 类型尚未声明该字段，因此用窄类型断言读取，字段结构已通过真实 API 验证。
 					const thinkingTokens = (event.usage as { output_tokens_details?: { thinking_tokens?: number } })
 						.output_tokens_details?.thinking_tokens;
 					if (thinkingTokens != null) {
 						output.usage.reasoning = thinkingTokens;
 					}
 					// Anthropic doesn't provide total_tokens, compute from components
+					// Anthropic 不提供总令牌数，需由输入、输出及缓存分量计算。
 					output.usage.totalTokens =
 						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 					calculateCost(model, output.usage);
@@ -728,6 +762,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			for (const block of output.content) {
 				delete (block as { index?: number }).index;
 				// partialJson is only a streaming scratch buffer; never persist it.
+				// partialJson 仅用于流式拼接，不能进入持久化或重放数据。
 				delete (block as { partialJson?: string }).partialJson;
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
@@ -743,6 +778,8 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 /**
  * Map ThinkingLevel to Anthropic effort levels for adaptive thinking.
  * Note: effort "max" is only valid on Opus 4.6, while Opus 4.7+ and Fable 5 support "xhigh".
+ *
+ * 将通用 ThinkingLevel 映射到 Anthropic 自适应推理级别；max 与 xhigh 的支持范围随模型版本不同。
  */
 function mapThinkingLevelToEffort(
 	model: Model<"anthropic-messages">,
@@ -778,6 +815,7 @@ export const streamSimple: StreamFunction<"anthropic-messages", SimpleStreamOpti
 
 	// For models with adaptive thinking: use an effort level.
 	// For older models: use budget-based thinking.
+	// 自适应推理模型使用 effort；旧模型继续采用固定令牌预算。
 	if (model.compat?.forceAdaptiveThinking === true) {
 		const effort = mapThinkingLevelToEffort(model, options.reasoning);
 		return stream(model, context, {
@@ -789,6 +827,7 @@ export const streamSimple: StreamFunction<"anthropic-messages", SimpleStreamOpti
 
 	// Undefined means the caller did not request an output cap; let the helper use the model cap.
 	// Do not coerce to 0 here, or the thinking budget would become the entire max_tokens value.
+	// undefined 表示调用方未限制输出，应采用模型上限；不能转成 0，否则推理预算会占满 max_tokens。
 	const adjusted = adjustMaxTokensForThinking(
 		base.maxTokens,
 		model.maxTokens,
@@ -820,6 +859,7 @@ function createClient(
 	sessionId?: string,
 ): { client: Anthropic; isOAuthToken: boolean } {
 	// Adaptive thinking models have interleaved thinking built in, so skip the beta header.
+	// 自适应推理模型已内置交错推理，无需再发送对应 beta 头。
 	const needsInterleavedBeta = interleavedThinking && model.compat?.forceAdaptiveThinking !== true;
 	const betaFeatures: string[] = [];
 	if (useFineGrainedToolStreamingBeta) {
@@ -830,6 +870,7 @@ function createClient(
 	}
 
 	// Copilot: Bearer auth, selective betas.
+	// Copilot 使用 Bearer 认证，并仅启用当前请求所需的 beta 能力。
 	if (model.provider === "github-copilot") {
 		const client = new Anthropic({
 			apiKey: null,
@@ -852,6 +893,7 @@ function createClient(
 	}
 
 	// OAuth: Bearer auth, Claude Code identity headers
+	// OAuth 路径使用 Bearer 认证，并附带 Claude Code 身份头以满足服务端要求。
 	if (apiKey && isOAuthToken(apiKey)) {
 		const client = new Anthropic({
 			apiKey: null,
@@ -875,6 +917,7 @@ function createClient(
 	}
 
 	// API key or header-owned auth.
+	// 普通 API Key 或由调用方请求头负责的认证路径。
 	const sessionAffinityHeaders: ProviderHeaders =
 		sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders ? { "x-session-affinity": sessionId } : {};
 	const defaultHeaders = mergeHeaders(
@@ -914,6 +957,7 @@ function buildParams(
 	};
 
 	// For OAuth tokens, we MUST include Claude Code identity
+	// OAuth 令牌请求必须包含 Claude Code 身份系统消息。
 	if (isOAuthToken) {
 		params.system = [
 			{
@@ -931,6 +975,7 @@ function buildParams(
 		}
 	} else if (context.systemPrompt) {
 		// Add cache control to system prompt for non-OAuth tokens
+		// 非 OAuth 请求可直接在系统提示上附加缓存控制。
 		params.system = [
 			{
 				type: "text",
@@ -941,6 +986,7 @@ function buildParams(
 	}
 
 	// Temperature is incompatible with extended thinking and unsupported on Claude Opus 4.7+.
+	// temperature 与扩展推理互斥，Claude Opus 4.7+ 也不支持该参数。
 	if (options?.temperature !== undefined && !options?.thinkingEnabled && compat.supportsTemperature) {
 		params.temperature = options.temperature;
 	}
@@ -955,16 +1001,20 @@ function buildParams(
 	}
 
 	// Configure thinking mode: adaptive, budget-based, or explicitly disabled.
+	// 根据模型能力配置自适应推理、预算式推理或显式关闭。
 	if (model.reasoning) {
 		if (options?.thinkingEnabled) {
 			// Default to "summarized" so Opus 4.7 and Mythos Preview behave like
 			// older Claude 4 models (whose API default is also "summarized").
+			// 默认 summarized，使 Opus 4.7 和 Mythos Preview 与旧版 Claude 4 的返回行为一致。
 			const display: AnthropicThinkingDisplay = options.thinkingDisplay ?? "summarized";
 			if (model.compat?.forceAdaptiveThinking === true) {
 				// Adaptive thinking: Claude decides when and how much to think.
+				// 自适应推理由 Claude 自行决定是否思考以及投入多少资源。
 				params.thinking = { type: "adaptive", display };
 				if (options.effort) {
 					// The Anthropic SDK types can lag newly supported effort values such as "xhigh".
+					// Anthropic SDK 类型可能落后于 xhigh 等新支持的 effort 值。
 					params.output_config =
 						options.effort === "xhigh"
 							? ({ effort: options.effort } as unknown as NonNullable<
@@ -974,6 +1024,7 @@ function buildParams(
 				}
 			} else {
 				// Budget-based thinking for older models
+				// 旧模型使用固定令牌预算的推理模式。
 				params.thinking = {
 					type: "enabled",
 					budget_tokens: options.thinkingBudgetTokens || 1024,
@@ -1004,6 +1055,7 @@ function buildParams(
 }
 
 // Normalize tool call IDs to match Anthropic's required pattern and length
+// 将工具调用 ID 规范化为 Anthropic 允许的字符集和最大长度。
 function normalizeToolCallId(id: string): string {
 	return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
@@ -1018,6 +1070,7 @@ function convertMessages(
 	const params: MessageParam[] = [];
 
 	// Transform messages for cross-provider compatibility
+	// 先做跨提供商消息规范化，再转换为 Anthropic 请求结构。
 	const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
 
 	for (let i = 0; i < transformedMessages.length; i++) {
@@ -1073,6 +1126,7 @@ function convertMessages(
 					});
 				} else if (block.type === "thinking") {
 					// Redacted thinking: pass the opaque payload back as redacted_thinking
+					// 对已遮蔽推理原样回传不透明载荷，不能尝试解释或改写其内容。
 					if (block.redacted) {
 						blocks.push({
 							type: "redacted_thinking",
@@ -1084,6 +1138,8 @@ function convertMessages(
 					// If thinking signature is missing/empty (e.g., from aborted stream),
 					// convert to plain text for Anthropic. Some compatible providers emit
 					// and accept empty signatures, so let marked models preserve the block.
+					// 推理签名缺失时，Anthropic 重放会失败，因此默认降级为普通文本；
+					// 明确标记兼容的提供商可保留空签名推理块。
 					if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
 						blocks.push(
 							allowEmptySignature
@@ -1120,9 +1176,11 @@ function convertMessages(
 			});
 		} else if (msg.role === "toolResult") {
 			// Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint
+			// 收集连续工具结果并合并发送，以兼容 z.ai 的 Anthropic 端点约束。
 			const toolResults: ContentBlockParam[] = [];
 
 			// Add the current tool result
+			// 先加入当前工具结果，再向后收集同组结果。
 			toolResults.push({
 				type: "tool_result",
 				tool_use_id: msg.toolCallId,
@@ -1131,9 +1189,11 @@ function convertMessages(
 			});
 
 			// Look ahead for consecutive toolResult messages
+			// 向前查找后续连续的工具结果，直到出现其他角色。
 			let j = i + 1;
 			while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
 				const nextMsg = transformedMessages[j] as ToolResultMessage; // We know it's a toolResult
+				// 循环条件已经确认该消息是 toolResult，因此这里的收窄是安全的。
 				toolResults.push({
 					type: "tool_result",
 					tool_use_id: nextMsg.toolCallId,
@@ -1144,9 +1204,11 @@ function convertMessages(
 			}
 
 			// Skip the messages we've already processed
+			// 推进外层索引，跳过已合并的消息。
 			i = j - 1;
 
 			// Add a single user message with all tool results
+			// 用一条用户消息承载整组工具结果。
 			params.push({
 				role: "user",
 				content: toolResults,
@@ -1155,6 +1217,7 @@ function convertMessages(
 	}
 
 	// Add cache_control to the last user message to cache conversation history
+	// 将 cache_control 附加到最后一条用户消息的末尾内容块，以缓存此前会话历史。
 	if (cacheControl && params.length > 0) {
 		const lastMessage = params[params.length - 1];
 		if (lastMessage.role === "user") {
@@ -1227,13 +1290,17 @@ function mapStopReason(
 				errorMessage: stopDetails?.explanation || `The model refused to complete the request`,
 			};
 		case "pause_turn": // Stop is good enough -> resubmit
+			// pause_turn 可按正常停止处理，由上层决定是否重新提交。
 			return { stopReason: "stop" };
 		case "stop_sequence":
+			// 本实现不发送停止序列，正常情况下不会收到该原因。
 			return { stopReason: "stop" }; // We don't supply stop sequences, so this should never happen
 		case "sensitive": // Content flagged by safety filters (not yet in SDK types)
+			// 内容被安全过滤器标记；当前 SDK 类型尚未包含该值。
 			return { stopReason: "error" };
 		default:
 			// Handle unknown stop reasons gracefully (API may add new values)
+			// API 可能新增停止原因；未知值应显式报错，避免错误归类。
 			throw new Error(`Unhandled stop reason: ${reason}`);
 	}
 }

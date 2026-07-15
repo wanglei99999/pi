@@ -12,17 +12,32 @@
 // composes into its display string. The `messageCarriesBody` flag captures the
 // Anthropic / `@google/genai` happy path where the SDK already folded the body
 // into the message, so providers can preserve it without double-printing.
+//
+// 该模块统一探测各 SDK 不同的状态码和响应体字段，避免代理/网关错误退化为无信息的通用消息。
+// messageCarriesBody 用于识别 SDK 已将响应体并入 message 的情况，防止提供商重复输出同一内容。
 
 export const MAX_PROVIDER_ERROR_BODY_CHARS = 4000;
 
 export interface NormalizedProviderError {
-	/** HTTP status code, when one could be extracted from the SDK error object. */
+	/**
+	 * HTTP status code, when one could be extracted from the SDK error object.
+	 * 从 SDK 错误对象中成功提取时的 HTTP 状态码。
+	 */
 	status?: number;
-	/** Raw HTTP body reason, already trimmed and truncated to the cap. */
+	/**
+	 * Raw HTTP body reason, already trimmed and truncated to the cap.
+	 * 已去除首尾空白并按上限截断的原始响应体原因。
+	 */
 	body?: string;
-	/** `error.message`, or `safeJsonStringify(error)` for a non-`Error` throw. */
+	/**
+	 * `error.message`, or `safeJsonStringify(error)` for a non-`Error` throw.
+	 * Error 使用 message，非 Error 抛出值则安全序列化。
+	 */
 	message: string;
-	/** True when `message` already contains the body (no separate body to add). */
+	/**
+	 * True when `message` already contains the body (no separate body to add).
+	 * message 已包含响应体时为 true，格式化阶段无需再次追加。
+	 */
 	messageCarriesBody: boolean;
 }
 
@@ -57,6 +72,7 @@ export function normalizeProviderError(error: unknown): NormalizedProviderError 
  * Probe the HTTP status, first numeric hit wins, in SDK-field order:
  * `statusCode` (Mistral) → `status` (`openai`, `@google/genai`) →
  * `$metadata.httpStatusCode` (Bedrock) → `$response.statusCode` (Bedrock).
+ * 按各 SDK 已知字段顺序提取首个数值状态码，字段优先级保持稳定以避免同一错误产生不同结果。
  */
 function extractStatus(error: SdkErrorShape): number | undefined {
 	if (typeof error.statusCode === "number") return error.statusCode;
@@ -72,6 +88,7 @@ function extractStatus(error: SdkErrorShape): number | undefined {
  * `this.error`) → `$response.body` (Bedrock). Empty objects are treated as no
  * body so an empty parsed body does not surface as `"{}"`. The chosen body is
  * truncated to the cap.
+ * 按 SDK 字段顺序选择首个有效响应体；空对象不视为错误详情，最终文本统一裁剪到安全长度上限。
  */
 function extractBody(error: SdkErrorShape): string | undefined {
 	const bodyText = pickBodyText(error);
@@ -102,6 +119,9 @@ function isNonEmptyObject(value: unknown): boolean {
  *
  * - no prefix: `"<status>: <body>"`
  * - prefix:    `"<prefix> (<status>): <body>"`
+ *
+ * SDK 已把 body 合入 message、或状态码/body 不完整时保留原 message；否则显式展示状态码和响应体，
+ * 可选 prefix 只影响显示格式，不改变错误分类信息。
  */
 export function formatProviderError(norm: NormalizedProviderError, prefix?: string): string {
 	if (norm.messageCarriesBody || norm.status === undefined || norm.body === undefined) {

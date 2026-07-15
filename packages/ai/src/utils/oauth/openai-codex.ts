@@ -1,11 +1,15 @@
 /**
  * OpenAI Codex (ChatGPT OAuth) flow
+ * OpenAI Codex（ChatGPT OAuth）登录流程。
  *
  * NOTE: This module uses Node.js crypto and http for the OAuth callback.
+ * 注意：本模块使用 Node.js crypto 和 http 实现 OAuth 回调，
  * It is only intended for CLI use, not browser environments.
+ * 仅供 CLI 环境使用，不面向浏览器运行时。
  */
 
 // NEVER convert to top-level imports - breaks browser/Vite builds
+// 不要改为顶层导入；延迟加载可避免浏览器/Vite 构建解析 Node.js 内置模块
 let _randomBytes: typeof import("node:crypto").randomBytes | null = null;
 let _http: typeof import("node:http") | null = null;
 if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
@@ -71,6 +75,7 @@ type JwtPayload = {
 };
 
 function createState(): string {
+	// state 使用密码学随机值，将回调绑定到当前登录尝试，防止跨请求注入。
 	if (!_randomBytes) {
 		throw new Error("OpenAI Codex OAuth is only available in Node.js environments");
 	}
@@ -78,6 +83,7 @@ function createState(): string {
 }
 
 function parseAuthorizationInput(input: string): { code?: string; state?: string } {
+	// 手动回退兼容完整重定向 URL、code#state、查询字符串和纯 code 四种输入形态。
 	const value = input.trim();
 	if (!value) return {};
 
@@ -89,6 +95,7 @@ function parseAuthorizationInput(input: string): { code?: string; state?: string
 		};
 	} catch {
 		// not a URL
+		// 不是 URL 时继续按手动 code 格式解析
 	}
 
 	if (value.includes("#")) {
@@ -124,6 +131,7 @@ async function fetchWithLoginCancellation(input: string, init: RequestInit): Pro
 		return await fetch(input, init);
 	} catch (error) {
 		if (init.signal?.aborted) {
+			// 将底层 AbortError 归一化为登录层稳定的取消错误。
 			throw new Error("Login cancelled");
 		}
 		throw error;
@@ -131,6 +139,7 @@ async function fetchWithLoginCancellation(input: string, init: RequestInit): Pro
 }
 
 async function readTokenResponse(response: Response, operation: TokenOperation): Promise<OAuthToken> {
+	// exchange 与 refresh 共用严格响应校验，避免持久化缺少 refresh token 或过期时间的凭证。
 	if (!response.ok) {
 		const text = await response.text().catch(() => "");
 		throw new Error(`OpenAI Codex token ${operation} failed (${response.status}): ${text || response.statusText}`);
@@ -159,6 +168,7 @@ async function exchangeAuthorizationCode(
 	redirectUri: string = REDIRECT_URI,
 	signal?: AbortSignal,
 ): Promise<OAuthToken> {
+	// PKCE verifier 与授权 code 一同交换 token；redirect_uri 必须与发起授权时完全一致。
 	const response = await fetchWithLoginCancellation(TOKEN_URL, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -176,6 +186,7 @@ async function exchangeAuthorizationCode(
 }
 
 async function refreshAccessToken(refreshToken: string): Promise<OAuthToken> {
+	// refresh 不参与交互式登录取消信号，但仍复用相同的 token 响应校验。
 	let response: Response;
 	try {
 		response = await fetch(TOKEN_URL, {
@@ -299,6 +310,7 @@ async function pollOpenAICodexDeviceAuth(device: DeviceAuthInfo, signal?: AbortS
 async function createAuthorizationFlow(
 	originator: string = "pi",
 ): Promise<{ verifier: string; state: string; url: string }> {
+	// 每次登录生成独立 PKCE verifier/challenge 与 state，二者分别绑定 token exchange 和浏览器回调。
 	const { verifier, challenge } = await generatePKCE();
 	const state = createState();
 
@@ -318,6 +330,7 @@ async function createAuthorizationFlow(
 }
 
 type OAuthServerInfo = {
+	/** close 释放监听端口；cancelWait 只结束等待，不负责关闭服务器。 */
 	close: () => void;
 	cancelWait: () => void;
 	waitForCode: () => Promise<{ code: string } | null>;
@@ -347,6 +360,7 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 				res.end(oauthErrorHtml("Callback route not found."));
 				return;
 			}
+			// 在读取 code 前校验 state，拒绝不属于当前授权尝试的回调。
 			if (url.searchParams.get("state") !== state) {
 				res.statusCode = 400;
 				res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -373,6 +387,7 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 
 	return new Promise((resolve) => {
 		server
+			// 固定监听授权端登记的 1455 端口；host 可通过环境变量限制到所需接口。
 			.listen(1455, getCallbackHost(), () => {
 				resolve({
 					close: () => server.close(),
@@ -383,6 +398,7 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 				});
 			})
 			.on("error", (_err: NodeJS.ErrnoException) => {
+				// 端口占用或监听失败不终止登录；返回空等待器，让上层转入手动 code 回退。
 				settleWait?.(null);
 				resolve({
 					close: () => {
@@ -431,6 +447,7 @@ async function exchangeAuthorizationCodeForCredentials(
 
 /**
  * Login with OpenAI Codex OAuth using the Codex device-code flow.
+ * 使用 Codex device-code 流程登录；服务端返回的 codeVerifier 用于最终 PKCE token exchange。
  */
 export async function loginOpenAICodexDeviceCode(options: {
 	onDeviceCode: (info: OAuthDeviceCodeInfo) => void;
@@ -454,13 +471,17 @@ export async function loginOpenAICodexDeviceCode(options: {
 
 /**
  * Login with OpenAI Codex OAuth
+ * 使用浏览器回调或手动 code 回退完成 OpenAI Codex OAuth 登录。
  *
  * @param options.onAuth - Called with URL and instructions when auth starts
  * @param options.onPrompt - Called to prompt user for manual code paste (fallback if no onManualCodeInput)
  * @param options.onProgress - Optional progress messages
  * @param options.onManualCodeInput - Optional promise that resolves with user-pasted code.
+ *                                    可选的用户粘贴 code Promise。
  *                                    Races with browser callback - whichever completes first wins.
+ *                                    与浏览器回调竞争，先完成者获胜。
  *                                    Useful for showing paste input immediately alongside browser flow.
+ *                                    适合在打开浏览器的同时立即显示粘贴输入框。
  * @param options.originator - OAuth originator parameter (defaults to "pi")
  */
 export async function loginOpenAICodex(options: {

@@ -3,13 +3,19 @@
  * surface: api-dispatch `stream()`/`complete()` with env API key injection,
  * the api-registry, generated catalog reads (`getModel`/`getModels`/
  * `getProviders`), per-API lazy stream wrappers, and image generation.
+ * 临时兼容入口，保留旧版全局 pi-ai API：包含注入环境变量密钥的
+ * `stream()`/`complete()` 分发、API 注册表、静态模型目录读取、各 API
+ * 的延迟流包装器和图片生成能力。
  *
  * Existing apps switch imports from "@earendil-works/pi-ai" to
  * "@earendil-works/pi-ai/compat" unchanged; new code uses `createModels()`
  * and the provider factories. This module is deleted with the coding-agent
  * ModelManager migration.
+ * 现有应用只需把导入路径切换到 "@earendil-works/pi-ai/compat"，调用方式无需改变；
+ * 新代码应使用 `createModels()` 和提供商工厂。coding-agent 完成 ModelManager 迁移后将删除本模块。
  */
 
+// 这些重新导出刻意复原旧入口的完整表面，包括历史别名；lazy 模块避免兼容入口立即加载所有 SDK。
 export * from "./api/anthropic-messages.lazy.ts";
 export * from "./api/azure-openai-responses.lazy.ts";
 export * from "./api/bedrock-converse-stream.lazy.ts";
@@ -53,12 +59,15 @@ import type {
 	StreamOptions,
 } from "./types.ts";
 
+/** 已弃用的静态目录读取；迁移到 providers/all 的 `getBuiltinModel` 或实例级 `Models.getModel()`。 */
 /** @deprecated Static catalog read. Use `getBuiltinModel` from "@earendil-works/pi-ai/providers/all" or `Models.getModel()`. */
 export const getModel = getBuiltinModel;
 
+/** 已弃用的静态目录读取；迁移到 providers/all 的 `getBuiltinModels` 或实例级 `Models.getModels()`。 */
 /** @deprecated Static catalog read. Use `getBuiltinModels` from "@earendil-works/pi-ai/providers/all" or `Models.getModels()`. */
 export const getModels = getBuiltinModels;
 
+/** 已弃用的静态目录读取；迁移到 providers/all 的 `getBuiltinProviders` 或实例级 `Models.getProviders()`。 */
 /** @deprecated Static catalog read. Use `getBuiltinProviders` from "@earendil-works/pi-ai/providers/all" or `Models.getProviders()`. */
 export const getProviders = getBuiltinProviders;
 
@@ -97,6 +106,7 @@ function wrapStream<TApi extends Api, TOptions extends StreamOptions>(
 	api: TApi,
 	stream: StreamFunction<TApi, TOptions>,
 ): ApiStreamFunction {
+	// 注册表擦除了具体 API 泛型，调用边界需运行时校验 model.api 后再恢复提供商类型。
 	return (model, context, options) => {
 		if (model.api !== api) {
 			throw new Error(`Mismatched api: ${model.api} expected ${api}`);
@@ -109,6 +119,7 @@ function wrapStreamSimple<TApi extends Api>(
 	api: TApi,
 	streamSimple: StreamFunction<TApi, SimpleStreamOptions>,
 ): ApiStreamSimpleFunction {
+	// simple 流与完整流使用相同的 API 身份校验，防止旧注册表把模型分发给错误实现。
 	return (model, context, options) => {
 		if (model.api !== api) {
 			throw new Error(`Mismatched api: ${model.api} expected ${api}`);
@@ -121,6 +132,7 @@ export function registerApiProvider<TApi extends Api, TOptions extends StreamOpt
 	provider: ApiProvider<TApi, TOptions>,
 	sourceId?: string,
 ): void {
+	// 同一 api id 后注册者覆盖旧条目，保留旧 API 支持测试或扩展注入替代实现的行为。
 	apiProviderRegistry.set(provider.api, {
 		provider: {
 			api: provider.api,
@@ -140,6 +152,7 @@ export function getApiProviders(): ApiProviderInternal[] {
 }
 
 export function unregisterApiProviders(sourceId: string): void {
+	// sourceId 将一次扩展注册的实现成组移除，不影响其他来源或内置条目。
 	for (const [api, entry] of apiProviderRegistry.entries()) {
 		if (entry.sourceId === sourceId) {
 			apiProviderRegistry.delete(api);
@@ -152,6 +165,7 @@ function clearApiProviders(): void {
 }
 
 export function registerFauxProvider(options: RegisterFauxProviderOptions = {}): FauxProviderRegistration {
+	// 每个 faux 提供商使用独立 sourceId，使测试清理只撤销本次注册。
 	const core = createFauxCore(options);
 	const sourceId = `faux-provider-${Math.random().toString(36).slice(2, 10)}`;
 	registerApiProvider({ api: core.api, stream: core.stream, streamSimple: core.streamSimple }, sourceId);
@@ -170,6 +184,7 @@ export function registerFauxProvider(options: RegisterFauxProviderOptions = {}):
 }
 
 const BUILTIN_APIS: [Api, ProviderStreams][] = [
+	// lazy 工厂在兼容入口初始化时提供流函数，但底层提供商 SDK 仍按各模块策略延迟加载。
 	["anthropic-messages", anthropicMessagesApi()],
 	["openai-completions", openAICompletionsApi()],
 	["openai-responses", openAIResponsesApi()],
@@ -187,12 +202,15 @@ const builtinApiProviderInstances = new Map<Api, ReturnType<typeof getApiProvide
  * Registers the builtin API implementations into the api-registry without
  * clobbering existing entries: compat may load after a test or extension has
  * already registered an override for a builtin api id.
+ * 把内置 API 实现注册到旧注册表，但不覆盖已有条目：compat 可能在测试或扩展已经
+ * 为同一内置 api id 注册替代实现后才加载。
  */
 export function registerBuiltInApiProviders(): void {
 	for (const [api, streams] of BUILTIN_APIS) {
 		if (!getApiProvider(api)) {
 			registerApiProvider({ api, stream: streams.stream, streamSimple: streams.streamSimple });
 		}
+		// 记录初始化后的实例身份，后续仅在内置注册未被替换时走新的 Models 分发路径。
 		builtinApiProviderInstances.set(api, getApiProvider(api));
 	}
 }
@@ -215,6 +233,7 @@ function withEnvApiKey<TOptions extends StreamOptions>(
 	model: Model<Api>,
 	options: TOptions | undefined,
 ): TOptions | undefined {
+	// 调用方显式 apiKey 优先；仅在缺失时复现旧 API 从提供商环境变量解析密钥的行为。
 	if (hasExplicitApiKey(options?.apiKey)) return options;
 	const apiKey = getEnvApiKey(model.provider, options?.env);
 	if (!apiKey) return options;
@@ -222,6 +241,7 @@ function withEnvApiKey<TOptions extends StreamOptions>(
 }
 
 function shouldUseBuiltinModels(model: Model<Api>): boolean {
+	// 只有模型属于内置目录且注册表仍指向初始化实例时，才安全委托给 compatModels。
 	const builtin = compatModels.getModel(model.provider, model.id);
 	return builtin?.api === model.api && getApiProvider(model.api) === builtinApiProviderInstances.get(model.api);
 }
@@ -239,6 +259,7 @@ export function stream<TApi extends Api>(
 	context: Context,
 	options?: ProviderStreamOptions,
 ): AssistantMessageEventStream {
+	// 迁移边界：未被覆盖的内置模型走实例化 Models；自定义/替代注册仍走旧全局注册表。
 	if (shouldUseBuiltinModels(model)) {
 		return compatModels.stream(model, context, options as ApiStreamOptions<TApi> | undefined);
 	}
@@ -251,6 +272,7 @@ export async function complete<TApi extends Api>(
 	context: Context,
 	options?: ProviderStreamOptions,
 ): Promise<AssistantMessage> {
+	// complete 保持旧版便利语义，本质上只是等待同一 stream 的最终结果。
 	const s = stream(model, context, options);
 	return s.result();
 }
@@ -260,6 +282,7 @@ export function streamSimple<TApi extends Api>(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
+	// simple 变体沿用相同分发和环境密钥优先级，只收窄可传入的流选项。
 	if (shouldUseBuiltinModels(model)) {
 		return compatModels.streamSimple(model, context, options);
 	}

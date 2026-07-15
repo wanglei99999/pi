@@ -27,6 +27,8 @@ function wrapGenerateImages<TApi extends ImagesApi, TOptions extends ImagesOptio
 	api: TApi,
 	generateImages: ImagesFunction<TApi, TOptions>,
 ): ImagesApiFunction {
+	// Preserve each provider's typed API boundary while exposing one uniform registry callable.
+	// 在暴露统一注册表调用接口的同时，保留每个 provider 的类型化 API 边界。
 	return (model, context, options) => {
 		if (model.api !== api) {
 			throw new Error(`Mismatched api: ${model.api} expected ${api}`);
@@ -39,6 +41,8 @@ export function registerImagesApiProvider<TApi extends ImagesApi, TOptions exten
 	provider: ImagesApiProvider<TApi, TOptions>,
 	sourceId?: string,
 ): void {
+	// Registration is last-write-wins for one API ID, allowing an explicit provider override.
+	// 同一 API ID 的注册采用后写覆盖，允许显式替换 provider。
 	imagesApiProviderRegistry.set(provider.api, {
 		provider: {
 			api: provider.api,
@@ -49,5 +53,7 @@ export function registerImagesApiProvider<TApi extends ImagesApi, TOptions exten
 }
 
 export function getImagesApiProvider(api: ImagesApi): ImagesApiProviderInternal | undefined {
+	// Lookup returns only the wrapped provider; source metadata remains isolated inside this module registry.
+	// 查找仅返回包装后的 provider；source 元数据仍隔离在本模块注册表内部。
 	return imagesApiProviderRegistry.get(api)?.provider;
 }

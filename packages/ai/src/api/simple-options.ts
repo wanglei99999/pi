@@ -50,6 +50,7 @@ export function clampReasoning(effort: ThinkingLevel | undefined): Exclude<Think
 
 export function adjustMaxTokensForThinking(
 	// Undefined means no explicit caller cap. Use the model cap and fit thinking inside it.
+	// undefined 表示调用方未显式限制：此时采用模型上限，并将推理预算纳入该上限。
 	baseMaxTokens: number | undefined,
 	modelMaxTokens: number,
 	reasoningLevel: ThinkingLevel,
