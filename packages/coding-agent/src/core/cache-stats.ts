@@ -51,12 +51,9 @@ export interface CacheWasteTotals {
 	missCount: number;
 }
 
-/**
- * Minimal pricing lookup, satisfied by ModelRegistry. Cost is $/million tokens.
- * ModelRegistry 可满足的最小价格查询接口，价格单位为每百万令牌美元数。
- */
+/** Minimal pricing lookup, satisfied by ModelRuntime. Cost is $/million tokens. */
 export interface ModelPriceSource {
-	find(provider: string, modelId: string): { cost: { cacheRead: number } } | undefined;
+	getModel(provider: string, modelId: string): { cost: { cacheRead: number } } | undefined;
 }
 
 /**
@@ -111,7 +108,7 @@ function detectMiss(
 	const readPerToken =
 		usage.cacheRead > 0
 			? usage.cost.cacheRead / usage.cacheRead
-			: (models.find(message.provider, message.model)?.cost.cacheRead ?? 0) / 1_000_000;
+			: (models.getModel(message.provider, message.model)?.cost.cacheRead ?? 0) / 1_000_000;
 
 	return {
 		missedTokens,

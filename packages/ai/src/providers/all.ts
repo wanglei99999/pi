@@ -1,7 +1,7 @@
 import { createImagesModels, type ImagesProvider, type MutableImagesModels } from "../images-models.ts";
 import { MODELS } from "../models.generated.ts";
 import { type CreateModelsOptions, createModels, type MutableModels, type Provider } from "../models.ts";
-import type { Api, KnownProvider, Model } from "../types.ts";
+import type { Api, Model } from "../types.ts";
 import { amazonBedrockProvider } from "./amazon-bedrock.ts";
 import { antLingProvider } from "./ant-ling.ts";
 import { anthropicProvider } from "./anthropic.ts";
@@ -29,6 +29,7 @@ import { opencodeProvider } from "./opencode.ts";
 import { opencodeGoProvider } from "./opencode-go.ts";
 import { openrouterProvider } from "./openrouter.ts";
 import { openrouterImagesProvider } from "./openrouter-images.ts";
+import { radiusProvider } from "./radius.ts";
 import { togetherProvider } from "./together.ts";
 import { vercelAIGatewayProvider } from "./vercel-ai-gateway.ts";
 import { xaiProvider } from "./xai.ts";
@@ -39,14 +40,21 @@ import { xiaomiTokenPlanSgpProvider } from "./xiaomi-token-plan-sgp.ts";
 import { zaiProvider } from "./zai.ts";
 import { zaiCodingCnProvider } from "./zai-coding-cn.ts";
 
+export { radiusProvider };
+
+/** Providers present in the generated catalog. `KnownProvider` additionally
+ * includes purely dynamic providers (e.g. "radius") that have no static
+ * catalog entry. */
+export type BuiltinProvider = keyof typeof MODELS;
+
 type BuiltinModelApi<
-	TProvider extends KnownProvider,
+	TProvider extends BuiltinProvider,
 	TModelId extends keyof (typeof MODELS)[TProvider],
 > = (typeof MODELS)[TProvider][TModelId] extends { api: infer TApi } ? (TApi extends Api ? TApi : never) : never;
 
 // 对生成的内置 catalog 进行类型化读取；类型关系来自 MODELS，而非运行时 provider 探测。
 /** Typed read of the generated built-in catalog. */
-export function getBuiltinModel<TProvider extends KnownProvider, TModelId extends keyof (typeof MODELS)[TProvider]>(
+export function getBuiltinModel<TProvider extends BuiltinProvider, TModelId extends keyof (typeof MODELS)[TProvider]>(
 	provider: TProvider,
 	modelId: TModelId,
 ): Model<BuiltinModelApi<TProvider, TModelId>> {
@@ -54,12 +62,11 @@ export function getBuiltinModel<TProvider extends KnownProvider, TModelId extend
 	return models?.[modelId as string] as Model<BuiltinModelApi<TProvider, TModelId>>;
 }
 
-export function getBuiltinProviders(): KnownProvider[] {
-	// 此列表反映生成 catalog 中实际包含的 provider，与下方运行时 factory 聚合保持职责分离。
-	return Object.keys(MODELS) as KnownProvider[];
+export function getBuiltinProviders(): BuiltinProvider[] {
+	return Object.keys(MODELS) as BuiltinProvider[];
 }
 
-export function getBuiltinModels<TProvider extends KnownProvider>(
+export function getBuiltinModels<TProvider extends BuiltinProvider>(
 	provider: TProvider,
 ): Model<BuiltinModelApi<TProvider, keyof (typeof MODELS)[TProvider]>>[] {
 	const models = MODELS[provider] as Record<string, Model<Api>> | undefined;
@@ -98,6 +105,7 @@ export function builtinProviders(): Provider[] {
 		opencodeProvider(),
 		opencodeGoProvider(),
 		openrouterProvider(),
+		radiusProvider(),
 		togetherProvider(),
 		vercelAIGatewayProvider(),
 		xaiProvider(),

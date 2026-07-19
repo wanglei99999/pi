@@ -15,6 +15,7 @@ import type {
 	StreamOptions,
 	Usage,
 } from "../types.ts";
+import { splitDeferredTools } from "../utils/deferred-tools.ts";
 import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
@@ -44,6 +45,10 @@ function getClientApiKey(provider: string, apiKey: string | undefined, headers: 
 	throw new Error(`No API key for provider: ${provider}`);
 }
 
+function detectSessionAffinityFormat(model: Pick<Model<"openai-responses">, "provider" | "baseUrl">) {
+	return model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai") ? "openrouter" : "openai";
+}
+
 /**
  * Resolve cache retention preference.
  * Defaults to "short" and uses PI_CACHE_RETENTION for backward compatibility.
@@ -62,8 +67,9 @@ function resolveCacheRetention(cacheRetention?: CacheRetention, env?: ProviderEn
 function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCompat> {
 	return {
 		supportsDeveloperRole: model.compat?.supportsDeveloperRole ?? true,
-		sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,
+		sessionAffinityFormat: model.compat?.sessionAffinityFormat ?? detectSessionAffinityFormat(model),
 		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
+		supportsToolSearch: model.compat?.supportsToolSearch ?? false,
 	};
 }
 
@@ -81,9 +87,10 @@ function formatOpenAIResponsesError(error: unknown): string {
 // OpenAI Responses-specific options
 // OpenAI Responses 专用选项；这些字段会直接影响推理摘要与服务等级。
 export interface OpenAIResponsesOptions extends StreamOptions {
-	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
+	toolChoice?: ResponseCreateParamsStreaming["tool_choice"];
 }
 
 /**
@@ -207,11 +214,14 @@ function createClient(
 	}
 
 	if (sessionId) {
-		// 部分兼容端点不接受 session_id，但 x-client-request-id 仍可用于请求关联。
-		if (compat.sendSessionIdHeader) {
-			headers.session_id = sessionId;
+		if (compat.sessionAffinityFormat === "openrouter") {
+			headers["x-session-id"] = sessionId;
+		} else {
+			if (compat.sessionAffinityFormat === "openai") {
+				headers.session_id = sessionId;
+			}
+			headers["x-client-request-id"] = sessionId;
 		}
-		headers["x-client-request-id"] = sessionId;
 	}
 
 	// Merge options headers last so they can override defaults
@@ -229,10 +239,13 @@ function createClient(
 }
 
 function buildParams(model: Model<"openai-responses">, context: Context, options?: OpenAIResponsesOptions) {
-	const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS);
+	const compat = getCompat(model);
+	const toolPlacement = splitDeferredTools(context, compat.supportsToolSearch);
+	const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
+		deferredTools: toolPlacement.deferred,
+	});
 
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
-	const compat = getCompat(model);
 	const params: ResponseCreateParamsStreaming = {
 		model: model.id,
 		input: messages,
@@ -254,8 +267,12 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 		params.service_tier = options.serviceTier;
 	}
 
-	if (context.tools && context.tools.length > 0) {
-		params.tools = convertResponsesTools(context.tools);
+	if (toolPlacement.immediate.length > 0) {
+		params.tools = convertResponsesTools(toolPlacement.immediate);
+	}
+
+	if (options?.toolChoice !== undefined) {
+		params.tool_choice = options.toolChoice;
 	}
 
 	if (model.reasoning) {
@@ -275,6 +292,7 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 				effort: (model.thinkingLevelMap?.off ?? "none") as NonNullable<typeof params.reasoning>["effort"],
 			};
 		}
+		if (model.provider === "xai") params.include = ["reasoning.encrypted_content"];
 	}
 
 	return params;

@@ -1212,9 +1212,8 @@ export function matchesKey(data: string, keyId: KeyId): boolean {
 			if (data === `\x1b${rawCtrl}`) return true;
 		}
 
-		if (modifier === MODIFIERS.alt && !_kittyProtocolActive && (isLetter || isDigit)) {
-			// Legacy: alt+letter/digit is ESC followed by the key
-			// 传统 Alt+字母或数字编码为 ESC 后跟原字符。
+		if (modifier === MODIFIERS.alt && !_kittyProtocolActive && (isLetter || isDigit || SYMBOL_KEYS.has(key))) {
+			// Legacy: alt+printable key is ESC followed by the key
 			if (data === `\x1b${key}`) return true;
 		}
 
@@ -1357,10 +1356,10 @@ export function parseKey(data: string): string | undefined {
 		if (code >= 1 && code <= 26) {
 			return `ctrl+alt+${String.fromCharCode(code + 96)}`;
 		}
-		// Legacy alt+letter/digit (ESC followed by the key)
-		// 传统 Alt+字母或数字由 ESC 前缀和原字符组成。
-		if ((code >= 97 && code <= 122) || (code >= 48 && code <= 57)) {
-			return `alt+${String.fromCharCode(code)}`;
+		// Legacy alt+letter/digit/symbol (ESC followed by the key)
+		const key = String.fromCharCode(code);
+		if ((code >= 97 && code <= 122) || (code >= 48 && code <= 57) || SYMBOL_KEYS.has(key)) {
+			return `alt+${key}`;
 		}
 	}
 	if (data === "\x1b[A") return "up";

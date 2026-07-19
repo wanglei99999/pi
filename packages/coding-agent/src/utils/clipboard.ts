@@ -34,6 +34,20 @@ function emitOsc52(text: string): boolean {
 	return true;
 }
 
+/** Read plain text from the system clipboard, if native clipboard access is available. */
+export async function readClipboardText(): Promise<string | null> {
+	if (!clipboard) {
+		return null;
+	}
+
+	try {
+		const text = await clipboard.getText();
+		return text || null;
+	} catch {
+		return null;
+	}
+}
+
 export async function copyToClipboard(text: string): Promise<void> {
 	// 本模块仅复制文本；图片剪贴板读取和平台格式处理由 clipboard-image.ts 负责。
 	let copied = false;

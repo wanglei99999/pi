@@ -27,7 +27,9 @@ import type {
 	Model,
 	OAuthCredentials,
 	OAuthLoginCallbacks,
+	Provider,
 	ProviderHeaders,
+	RefreshModelsContext,
 	SimpleStreamOptions,
 	TextContent,
 	ToolResultMessage,
@@ -1434,6 +1436,7 @@ export interface ExtensionAPI {
 	 *   }
 	 * });
 	 */
+	registerProvider(provider: Provider): void;
 	registerProvider(name: string, config: ProviderConfig): void;
 
 	/**
@@ -1482,17 +1485,24 @@ export interface ProviderConfig {
 	authHeader?: boolean;
 	/** Models to register. If provided, replaces all existing models for this provider. */
 	models?: ProviderModelConfig[];
+	/**
+	 * Refresh this provider's model list. The returned list replaces extension-provided models.
+	 * Use context.store explicitly when the catalog should persist across sessions.
+	 */
+	refreshModels?(context: RefreshModelsContext): Promise<ProviderModelConfig[]>;
 	/** OAuth provider for /login support. The `id` is set automatically from the provider name. */
 	oauth?: {
 		/** Display name for the provider in login UI. */
 		name: string;
+		/** @deprecated Retained for source compatibility; canonical auth flows ignore it. */
+		usesCallbackServer?: boolean;
 		/** Run the login flow, return credentials to persist. */
 		login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials>;
 		/** Refresh expired credentials, return updated credentials to persist. */
 		refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
 		/** Convert credentials to API key string for the provider. */
 		getApiKey(credentials: OAuthCredentials): string;
-		/** Optional: modify models for this provider (e.g., update baseUrl based on credentials). */
+		/** Legacy synchronous credential-dependent model projection. */
 		modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
 	};
 }
@@ -1513,8 +1523,8 @@ export interface ProviderModelConfig {
 	thinkingLevelMap?: Model<Api>["thinkingLevelMap"];
 	/** Supported input types. */
 	input: ("text" | "image")[];
-	/** Cost per token (for tracking, can be 0). */
-	cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+	/** Per-million-token cost rates and optional request-wide input pricing tiers. */
+	cost: Model<Api>["cost"];
 	/** Maximum context window size in tokens. */
 	contextWindow: number;
 	/** Maximum output tokens. */
@@ -1534,6 +1544,8 @@ export type InlineExtension =
 			/** Display name shown as `<inline:name>` in the startup Extensions list. */
 			name: string;
 			factory: ExtensionFactory;
+			/** Omit this extension from the startup Extensions list. */
+			hidden?: boolean;
 	  };
 
 // ============================================================================
@@ -1609,8 +1621,10 @@ export type SetLabelHandler = (entryId: string, label: string | undefined) => vo
  */
 export interface ExtensionRuntimeState {
 	flagValues: Map<string, boolean | string>;
-	/** Provider registrations queued during extension loading, processed when runner binds */
+	/** Legacy provider-config registrations queued during extension loading, processed when runner binds. */
 	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; extensionPath: string }>;
+	/** Native pi-ai provider registrations queued during extension loading, processed when runner binds. */
+	pendingNativeProviderRegistrations: Array<{ provider: Provider; extensionPath: string }>;
 	/** Throws when this extension instance is stale after runtime replacement. */
 	assertActive: () => void;
 	/** Marks this extension instance as stale after runtime replacement or reload. */
@@ -1624,6 +1638,7 @@ export interface ExtensionRuntimeState {
 	 * bindCore 前只维护待处理队列，绑定完成后则直接操作 ModelRegistry，以保持同一 API 在两个阶段的语义一致。
 	 */
 	registerProvider: (name: string, config: ProviderConfig, extensionPath?: string) => void;
+	registerNativeProvider: (provider: Provider, extensionPath?: string) => void;
 	unregisterProvider: (name: string, extensionPath?: string) => void;
 }
 
@@ -1706,6 +1721,7 @@ export interface ExtensionRuntime extends ExtensionRuntimeState, ExtensionAction
 export interface Extension {
 	path: string;
 	resolvedPath: string;
+	hidden?: boolean;
 	sourceInfo: SourceInfo;
 	handlers: Map<string, HandlerFn[]>;
 	tools: Map<string, RegisteredTool>;

@@ -766,6 +766,7 @@ async function finalizeExecutedToolCall(
 			);
 			if (afterResult) {
 				result = {
+					...result,
 					content: afterResult.content ?? result.content,
 					details: afterResult.details ?? result.details,
 					terminate: afterResult.terminate ?? result.terminate,
@@ -813,6 +814,7 @@ function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResul
 		// 避免 null 进入会话历史或提供商请求载荷。
 		content: finalized.result.content ?? [],
 		details: finalized.result.details,
+		...(finalized.result.addedToolNames?.length ? { addedToolNames: finalized.result.addedToolNames } : {}),
 		isError: finalized.isError,
 		timestamp: Date.now(),
 	};

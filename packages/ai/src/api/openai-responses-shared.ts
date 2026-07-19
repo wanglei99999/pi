@@ -6,11 +6,13 @@ import type {
 	ResponseInput,
 	ResponseInputContent,
 	ResponseInputImage,
+	ResponseInputItem,
 	ResponseInputText,
 	ResponseOutputItem,
 	ResponseOutputMessage,
 	ResponseReasoningItem,
 	ResponseStreamEvent,
+	ResponseToolSearchOutputItemParam,
 } from "openai/resources/responses/responses.js";
 import { calculateCost } from "../models.ts";
 import type {
@@ -79,11 +81,15 @@ export interface OpenAIResponsesStreamOptions {
 
 export interface ConvertResponsesMessagesOptions {
 	includeSystemPrompt?: boolean;
+	deferredTools?: ReadonlyMap<string, Tool>;
 }
 
 export interface ConvertResponsesToolsOptions {
 	strict?: boolean | null;
+	deferLoading?: boolean;
 }
+
+type OpenAIFunctionTool = Extract<OpenAITool, { type: "function" }>;
 
 // =============================================================================
 // Message conversion
@@ -97,6 +103,7 @@ export function convertResponsesMessages<TApi extends Api>(
 	options?: ConvertResponsesMessagesOptions,
 ): ResponseInput {
 	const messages: ResponseInput = [];
+	const loadedToolNames = new Set<string>();
 
 	const normalizeIdPart = (part: string): string => {
 		const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -270,6 +277,32 @@ export function convertResponsesMessages<TApi extends Api>(
 				call_id: callId,
 				output,
 			});
+
+			const deferredTools: Tool[] = [];
+			for (const name of msg.addedToolNames ?? []) {
+				const tool = options?.deferredTools?.get(name);
+				if (!tool || loadedToolNames.has(name)) continue;
+				loadedToolNames.add(name);
+				deferredTools.push(tool);
+			}
+			if (deferredTools.length > 0) {
+				const names = deferredTools.map((tool) => tool.name);
+				const searchCallId = `pi_tool_load_${shortHash(`${msg.toolCallId}:${names.join(",")}`)}`;
+				messages.push({
+					type: "tool_search_call",
+					call_id: searchCallId,
+					execution: "client",
+					status: "completed",
+					arguments: { query: names.join(" "), limit: names.length },
+				} satisfies ResponseInputItem);
+				messages.push({
+					type: "tool_search_output",
+					call_id: searchCallId,
+					execution: "client",
+					status: "completed",
+					tools: convertResponsesTools(deferredTools, { deferLoading: true }),
+				} satisfies ResponseToolSearchOutputItemParam);
+			}
 		}
 		msgIndex++;
 	}
@@ -282,16 +315,18 @@ export function convertResponsesMessages<TApi extends Api>(
 // 工具转换
 // =============================================================================
 
-export function convertResponsesTools(tools: Tool[], options?: ConvertResponsesToolsOptions): OpenAITool[] {
+export function convertResponsesTools(tools: readonly Tool[], options?: ConvertResponsesToolsOptions): OpenAITool[] {
 	const strict = options?.strict === undefined ? false : options.strict;
-	return tools.map((tool) => ({
-		type: "function",
-		name: tool.name,
-		description: tool.description,
-		parameters: tool.parameters as any, // TypeBox already generates JSON Schema
-		// TypeBox 已生成 JSON Schema；此处只适配 SDK 的参数类型声明。
-		strict,
-	}));
+	return tools.map(
+		(tool): OpenAIFunctionTool => ({
+			type: "function",
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.parameters as Record<string, unknown>, // TypeBox already generates JSON Schema
+			strict,
+			...(options?.deferLoading ? { defer_loading: true } : {}),
+		}),
+	);
 }
 
 // =============================================================================
@@ -317,6 +352,7 @@ export async function processResponsesStream<TApi extends Api>(
 	let sawTerminalResponseEvent = false;
 	// output_index 是 Responses 事件间的关联键，contentIndex 则固定内部消息块和下游事件的位置。
 	const outputSlots = new Map<number, ResponsesOutputSlot>();
+	const reasoningBlocksById = new Map<string, ThinkingContent>();
 	const getSlot = <TType extends ResponsesOutputSlot["type"]>(
 		outputIndex: number,
 		type: TType,
@@ -370,22 +406,44 @@ export async function processResponsesStream<TApi extends Api>(
 		// 兼容缺少 added 事件而直接收到 done 的流，确保最终快照仍能落入输出消息。
 		return outputSlots.get(outputIndex) ?? createSlot(outputIndex, item);
 	};
+	// Azure OpenAI can omit reasoning.encrypted_content from response.output_item.done
+	// and provide it only in response.completed.response.output. Backfill the
+	// persisted reasoning signature from the terminal response to keep store:false
+	// multi-turn replay stateless. See https://github.com/earendil-works/pi/issues/6409.
+	const backfillReasoningSignatures = (responseOutput: ResponseOutputItem[]): void => {
+		for (const item of responseOutput) {
+			if (item.type !== "reasoning" || !item.encrypted_content) continue;
+			const block = reasoningBlocksById.get(item.id);
+			if (!block?.thinkingSignature) continue;
+
+			const storedItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
+			if (storedItem.encrypted_content) continue;
+			block.thinkingSignature = JSON.stringify({
+				...storedItem,
+				encrypted_content: item.encrypted_content,
+			});
+		}
+	};
 	const finalizeResponse = (
 		response: Extract<ResponseStreamEvent, { type: "response.completed" | "response.incomplete" }>["response"],
 	): void => {
 		sawTerminalResponseEvent = true;
+		backfillReasoningSignatures(response.output ?? []);
 		if (response?.id) {
 			output.responseId = response.id;
 		}
 		if (response?.usage) {
-			const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
+			const inputDetails = response.usage.input_tokens_details as
+				| { cached_tokens?: number; cache_write_tokens?: number }
+				| undefined;
+			const cachedTokens = inputDetails?.cached_tokens || 0;
+			const cacheWriteTokens = inputDetails?.cache_write_tokens || 0;
 			output.usage = {
-				// OpenAI includes cached tokens in input_tokens, so subtract to get non-cached input
-				// OpenAI 的 input_tokens 已包含缓存命中量；扣除后才是应按普通输入计费的 token。
-				input: (response.usage.input_tokens || 0) - cachedTokens,
+				// OpenAI includes cached and cache-write tokens in input_tokens, so subtract both.
+				input: Math.max(0, (response.usage.input_tokens || 0) - cachedTokens - cacheWriteTokens),
 				output: response.usage.output_tokens || 0,
 				cacheRead: cachedTokens,
-				cacheWrite: 0,
+				cacheWrite: cacheWriteTokens,
 				reasoning: response.usage.output_tokens_details?.reasoning_tokens || 0,
 				totalTokens: response.usage.total_tokens || 0,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -502,7 +560,7 @@ export async function processResponsesStream<TApi extends Api>(
 				const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
 				slot.block.thinking = summaryText || contentText || slot.block.thinking;
 				slot.block.thinkingSignature = JSON.stringify(item);
-				// 推理正文用于展示，完整 item 则作为不透明签名保存，供后续同模型会话重放。
+				reasoningBlocksById.set(item.id, slot.block);
 				stream.push({
 					type: "thinking_end",
 					contentIndex: slot.contentIndex,

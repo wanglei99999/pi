@@ -1,5 +1,4 @@
-import type { Api, ImagesApi, ImagesModel, Model, ProviderEnv, ProviderHeaders } from "../types.ts";
-import type { OAuthCredentials } from "../utils/oauth/types.ts";
+import type { ProviderEnv, ProviderHeaders } from "../types.ts";
 
 /**
  * Request auth for a single model request. If a value cannot be expressed as
@@ -23,10 +22,15 @@ export interface ApiKeyCredential {
 	env?: ProviderEnv;
 }
 
-/**
- * Stored OAuth credential (`access`, `refresh`, `expires` from OAuthCredentials).
- * 持久化 OAuth 凭证沿用 OAuthCredentials 的访问令牌、刷新令牌与过期时间结构。
- */
+/** OAuth token data returned by extension compatibility flows. */
+export interface OAuthCredentials {
+	refresh: string;
+	access: string;
+	expires: number;
+	[key: string]: unknown;
+}
+
+/** Stored canonical OAuth credential. */
 export interface OAuthCredential extends OAuthCredentials {
 	type: "oauth";
 }
@@ -36,6 +40,12 @@ export interface OAuthCredential extends OAuthCredentials {
  * 每个提供商只保存一个带类型标签的凭证，与当前 auth.json 数据模型一致。
  */
 export type Credential = ApiKeyCredential | OAuthCredential;
+
+/** Non-secret credential metadata for account/status enumeration. */
+export interface CredentialInfo {
+	providerId: string;
+	type: Credential["type"];
+}
 
 /**
  * App-owned credential storage, keyed by `Provider.id`, one credential per
@@ -63,6 +73,12 @@ export interface CredentialStore {
 	 * 读取原始持久化凭证供状态展示，结果可能已过期；实际请求认证必须通过 Models.getAuth() 解析。
 	 */
 	read(providerId: string): Promise<Credential | undefined>;
+
+	/**
+	 * List stored credential metadata without resolving or exposing secrets.
+	 * Implementations must not execute configured API-key commands while listing.
+	 */
+	list(): Promise<readonly CredentialInfo[]>;
 
 	/**
 	 * Serialized write — the only write path. `fn` sees the current credential
@@ -112,6 +128,13 @@ export interface AuthResult {
 	source?: string;
 }
 
+export interface AuthCheck {
+	source?: string;
+	type: "api_key" | "oauth";
+}
+
+export type AuthType = "api_key" | "oauth";
+
 /**
  * Prompt shown to the user during login. `signal` lets the flow cancel a
  * pending prompt when an out-of-band event resolves the step, e.g. a
@@ -126,7 +149,13 @@ export type AuthPrompt = { signal?: AbortSignal } & (
 	| { type: "manual_code"; message: string; placeholder?: string }
 );
 
+export interface AuthInfoLink {
+	url: string;
+	label?: string;
+}
+
 export type AuthEvent =
+	| { type: "info"; message: string; links?: readonly AuthInfoLink[] }
 	| { type: "auth_url"; url: string; instructions?: string }
 	| {
 			type: "device_code";
@@ -145,7 +174,7 @@ export type AuthEvent =
  * per-prompt cancellation uses `AuthPrompt.signal`.
  * prompt 返回输入值或选择项 id，取消时拒绝；callbacks.signal 控制整个登录流程，AuthPrompt.signal 只取消单次提示。
  */
-export interface AuthLoginCallbacks {
+export interface AuthInteraction {
 	signal?: AbortSignal;
 
 	prompt(prompt: AuthPrompt): Promise<string>;
@@ -162,21 +191,22 @@ export interface ApiKeyAuth {
 	name: string;
 
 	/** Interactive setup (prompt for key/provider env). Absent = ambient-only. */
-	login?(callbacks: AuthLoginCallbacks): Promise<ApiKeyCredential>;
+	login?(interaction: AuthInteraction): Promise<ApiKeyCredential>;
+
+	/**
+	 * Optional side-effect-free availability check. Use this when `resolve()` may
+	 * execute commands or perform other request-time work. Missing means Models
+	 * checks availability by resolving auth.
+	 */
+	check?(input: { ctx: AuthContext; credential?: ApiKeyCredential }): Promise<AuthCheck | undefined>;
 
 	/**
 	 * Resolve auth from the stored credential and/or ambient sources, merging
 	 * per field (`credential.key ?? env("...")`, `credential.env?.NAME ?? env("...")`).
-	 * undefined = not configured. Receives the chat or image-generation model
-	 * the request is for (both carry `provider` and `baseUrl`).
-	 *
-	 * resolve 按字段合并持久化值和环境来源，并根据具体聊天或图片模型解析；返回 undefined 表示当前未配置。
+	 * undefined = not configured. Resolution is provider-scoped; model-specific
+	 * endpoint preparation happens after auth has been resolved.
 	 */
-	resolve(input: {
-		model: Model<Api> | ImagesModel<ImagesApi>;
-		ctx: AuthContext;
-		credential?: ApiKeyCredential;
-	}): Promise<AuthResult | undefined>;
+	resolve(input: { ctx: AuthContext; credential?: ApiKeyCredential }): Promise<AuthResult | undefined>;
 }
 
 /**
@@ -189,14 +219,17 @@ export interface OAuthAuth {
 	/** Display name, e.g. "Anthropic (Claude Pro/Max)". */
 	name: string;
 
-	login(callbacks: AuthLoginCallbacks): Promise<OAuthCredential>;
+	/** Selector label for the subscription login option, e.g. "Sign in with SuperGrok or X Premium". */
+	loginLabel?: string;
+
+	login(interaction: AuthInteraction): Promise<OAuthCredential>;
 
 	/**
 	 * Exchange the refresh token. Network call; throws on failure
 	 * (invalid_grant etc.). `Models` runs this under the store lock.
 	 * 使用刷新令牌执行网络交换，失败时抛错；Models 必须在凭证存储锁内调用。
 	 */
-	refresh(credential: OAuthCredential): Promise<OAuthCredential>;
+	refresh(credential: OAuthCredential, signal?: AbortSignal): Promise<OAuthCredential>;
 
 	/**
 	 * Side-effect-free derivation of request auth from a valid credential.

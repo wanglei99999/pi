@@ -338,12 +338,10 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 
 /**
  * Thinking/reasoning level for models that support it.
- * Note: "xhigh" is only supported by selected model families. Use model thinking-level metadata
- * from @earendil-works/pi-ai to detect support for a concrete model.
- * 支持思考/推理的模型所使用的级别。"xhigh" 仅受部分模型系列支持，
- * 应使用 @earendil-works/pi-ai 的模型思考级别元数据检测具体模型是否支持。
+ * Note: "xhigh" and "max" are only supported by selected model families. Use model
+ * thinking-level metadata from @earendil-works/pi-ai to detect support for a concrete model.
  */
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
  * Extensible interface for custom app messages.
@@ -426,6 +424,8 @@ export interface AgentToolResult<T> {
 	/** Arbitrary structured details for logs or UI rendering. */
 	/** 用于日志或 UI 渲染的任意结构化详情。 */
 	details: T;
+	/** Names of tools introduced by this result and available from this transcript point onward. */
+	addedToolNames?: string[];
 	/**
 	 * Hint that the agent should stop after the current tool batch.
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.

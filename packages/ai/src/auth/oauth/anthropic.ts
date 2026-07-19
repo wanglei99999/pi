@@ -9,11 +9,10 @@
  */
 
 import type { Server } from "node:http";
-import type { OAuthAuth } from "../../auth/types.ts";
-import { getProviderEnvValue } from "../provider-env.ts";
+import { getProviderEnvValue } from "../../utils/provider-env.ts";
+import type { AuthInteraction, OAuthAuth, OAuthCredential } from "../types.ts";
 import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.ts";
 import { generatePKCE } from "./pkce.ts";
-import type { OAuthCredentials, OAuthLoginCallbacks, OAuthPrompt, OAuthProviderInterface } from "./types.ts";
 
 type CallbackServerInfo = {
 	server: Server;
@@ -199,7 +198,7 @@ async function exchangeAuthorizationCode(
 	state: string,
 	verifier: string,
 	redirectUri: string,
-): Promise<OAuthCredentials> {
+): Promise<OAuthCredential> {
 	let responseBody: string;
 	try {
 		responseBody = await postJson(TOKEN_URL, {
@@ -226,6 +225,7 @@ async function exchangeAuthorizationCode(
 	}
 
 	return {
+		type: "oauth",
 		refresh: tokenData.refresh_token,
 		access: tokenData.access_token,
 		// 提前五分钟视为过期，避免请求途中令牌恰好失效。
@@ -233,23 +233,15 @@ async function exchangeAuthorizationCode(
 	};
 }
 
-/**
- * Login with Anthropic OAuth (authorization code + PKCE)
- * 使用 Anthropic OAuth（授权码 + PKCE）登录。
- */
-export async function loginAnthropic(options: {
-	onAuth: (info: { url: string; instructions?: string }) => void;
-	onPrompt: (prompt: OAuthPrompt) => Promise<string>;
-	onProgress?: (message: string) => void;
-	onManualCodeInput?: () => Promise<string>;
-}): Promise<OAuthCredentials> {
+async function loginAnthropic(interaction: AuthInteraction): Promise<OAuthCredential> {
 	const { verifier, challenge } = await generatePKCE();
 	// verifier 同时作为 PKCE 校验值和 OAuth state，使回调来源校验与令牌交换使用同一份随机秘密。
 	const server = await startCallbackServer(verifier);
-
+	const manualAbort = new AbortController();
 	let code: string | undefined;
 	let state: string | undefined;
-	let redirectUriForExchange = REDIRECT_URI;
+	let manualInput: string | undefined;
+	let manualError: Error | undefined;
 
 	try {
 		const authParams = new URLSearchParams({
@@ -262,95 +254,58 @@ export async function loginAnthropic(options: {
 			code_challenge_method: "S256",
 			state: verifier,
 		});
-
-		options.onAuth({
+		interaction.notify({
+			type: "auth_url",
 			url: `${AUTHORIZE_URL}?${authParams.toString()}`,
 			instructions:
 				"Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.",
 		});
 
-		if (options.onManualCodeInput) {
-			// 手动输入与本地回调并行等待，任一路径完成都会取消另一条等待路径。
-			let manualInput: string | undefined;
-			let manualError: Error | undefined;
-			const manualPromise = options
-				.onManualCodeInput()
-				.then((input) => {
-					manualInput = input;
-					server.cancelWait();
-				})
-				.catch((err) => {
-					manualError = err instanceof Error ? err : new Error(String(err));
-					server.cancelWait();
-				});
-
-			const result = await server.waitForCode();
-
-			if (manualError) {
-				throw manualError;
-			}
-
-			if (result?.code) {
-				code = result.code;
-				state = result.state;
-				redirectUriForExchange = REDIRECT_URI;
-			} else if (manualInput) {
-				const parsed = parseAuthorizationInput(manualInput);
-				if (parsed.state && parsed.state !== verifier) {
-					throw new Error("OAuth state mismatch");
-				}
-				code = parsed.code;
-				state = parsed.state ?? verifier;
-			}
-
-			if (!code) {
-				await manualPromise;
-				if (manualError) {
-					throw manualError;
-				}
-				if (manualInput) {
-					const parsed = parseAuthorizationInput(manualInput);
-					if (parsed.state && parsed.state !== verifier) {
-						throw new Error("OAuth state mismatch");
-					}
-					code = parsed.code;
-					state = parsed.state ?? verifier;
-				}
-			}
-		} else {
-			const result = await server.waitForCode();
-			if (result?.code) {
-				code = result.code;
-				state = result.state;
-				redirectUriForExchange = REDIRECT_URI;
-			}
-		}
-
-		if (!code) {
-			const input = await options.onPrompt({
-				message: "Paste the authorization code or full redirect URL:",
+		const manualPromise = interaction
+			.prompt({
+				type: "manual_code",
+				message: "Complete login in your browser, or paste the authorization code / redirect URL here:",
 				placeholder: REDIRECT_URI,
+				signal: manualAbort.signal,
+			})
+			.then((input) => {
+				manualInput = input;
+				server.cancelWait();
+			})
+			.catch((error) => {
+				manualError = error instanceof Error ? error : new Error(String(error));
+				server.cancelWait();
 			});
-			const parsed = parseAuthorizationInput(input);
-			if (parsed.state && parsed.state !== verifier) {
-				throw new Error("OAuth state mismatch");
-			}
+
+		const result = await server.waitForCode();
+		if (manualError) throw manualError;
+		if (result?.code) {
+			code = result.code;
+			state = result.state;
+		} else if (manualInput) {
+			const parsed = parseAuthorizationInput(manualInput);
+			if (parsed.state && parsed.state !== verifier) throw new Error("OAuth state mismatch");
 			code = parsed.code;
 			state = parsed.state ?? verifier;
 		}
 
 		if (!code) {
-			throw new Error("Missing authorization code");
+			await manualPromise;
+			if (manualError) throw manualError;
+			if (manualInput) {
+				const parsed = parseAuthorizationInput(manualInput);
+				if (parsed.state && parsed.state !== verifier) throw new Error("OAuth state mismatch");
+				code = parsed.code;
+				state = parsed.state ?? verifier;
+			}
 		}
 
-		if (!state) {
-			throw new Error("Missing OAuth state");
-		}
-
-		options.onProgress?.("Exchanging authorization code for tokens...");
-		return exchangeAuthorizationCode(code, state, verifier, redirectUriForExchange);
+		if (!code) throw new Error("Missing authorization code");
+		if (!state) throw new Error("Missing OAuth state");
+		interaction.notify({ type: "progress", message: "Exchanging authorization code for tokens..." });
+		return exchangeAuthorizationCode(code, state, verifier, REDIRECT_URI);
 	} finally {
-		// 无论认证、解析还是令牌交换是否成功，都必须释放固定回调端口。
+		manualAbort.abort();
 		server.server.close();
 	}
 }
@@ -359,7 +314,7 @@ export async function loginAnthropic(options: {
  * Refresh Anthropic OAuth token
  * 刷新 Anthropic OAuth 令牌。
  */
-export async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
+async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredential> {
 	let responseBody: string;
 	try {
 		responseBody = await postJson(TOKEN_URL, {
@@ -386,6 +341,7 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
 	}
 
 	return {
+		type: "oauth",
 		refresh: data.refresh_token,
 		access: data.access_token,
 		// 与首次交换保持相同的提前过期窗口，防止刷新后的令牌在请求期间失效。
@@ -395,61 +351,10 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
 
 export const anthropicOAuth: OAuthAuth = {
 	name: "Anthropic (Claude Pro/Max)",
-
-	async login(callbacks) {
-		// The manual_code prompt races the local callback server; abort it once
-		// the flow settles so the UI can dismiss the pending input.
-		// manual_code 提示与本地回调服务器并行竞争；流程结束后中止提示，
-		// 以便 UI 关闭仍在等待的输入框。
-		const manualAbort = new AbortController();
-		try {
-			const credentials = await loginAnthropic({
-				onAuth: (info) => callbacks.notify({ type: "auth_url", url: info.url, instructions: info.instructions }),
-				onProgress: (message) => callbacks.notify({ type: "progress", message }),
-				onPrompt: (prompt) =>
-					callbacks.prompt({ type: "text", message: prompt.message, placeholder: prompt.placeholder }),
-				onManualCodeInput: () =>
-					callbacks.prompt({
-						type: "manual_code",
-						message: "Complete login in your browser, or paste the authorization code / redirect URL here:",
-						placeholder: REDIRECT_URI,
-						signal: manualAbort.signal,
-					}),
-			});
-			return { ...credentials, type: "oauth" };
-		} finally {
-			manualAbort.abort();
-		}
-	},
-
-	async refresh(credential) {
-		return { ...(await refreshAnthropicToken(credential.refresh)), type: "oauth" };
-	},
+	login: loginAnthropic,
+	refresh: (credential) => refreshAnthropicToken(credential.refresh),
 
 	async toAuth(credential) {
 		return { apiKey: credential.access };
-	},
-};
-
-export const anthropicOAuthProvider: OAuthProviderInterface = {
-	id: "anthropic",
-	name: "Anthropic (Claude Pro/Max)",
-	usesCallbackServer: true,
-
-	async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-		return loginAnthropic({
-			onAuth: callbacks.onAuth,
-			onPrompt: callbacks.onPrompt,
-			onProgress: callbacks.onProgress,
-			onManualCodeInput: callbacks.onManualCodeInput,
-		});
-	},
-
-	async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-		return refreshAnthropicToken(credentials.refresh);
-	},
-
-	getApiKey(credentials: OAuthCredentials): string {
-		return credentials.access;
 	},
 };

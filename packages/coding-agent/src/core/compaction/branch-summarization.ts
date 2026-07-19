@@ -76,8 +76,7 @@ export interface GenerateBranchSummaryOptions {
 	/** 用于生成摘要的模型。 */
 	model: Model<any>;
 	/** API key for the model */
-	/** 模型的 API 密钥。 */
-	apiKey: string;
+	apiKey?: string;
 	/** Request headers for the model */
 	/** 模型请求头。 */
 	headers?: Record<string, string>;

@@ -11,8 +11,8 @@ import type { ApiKeyAuth, OAuthAuth } from "./types.ts";
 export function envApiKeyAuth(name: string, envVars: readonly string[]): ApiKeyAuth {
 	return {
 		name,
-		login: async (callbacks) => {
-			const key = await callbacks.prompt({ type: "secret", message: `Enter ${name}` });
+		login: async (interaction) => {
+			const key = await interaction.prompt({ type: "secret", message: `Enter ${name}` });
 			return { type: "api_key", key };
 		},
 		resolve: async ({ ctx, credential }) => {
@@ -35,7 +35,7 @@ export function envApiKeyAuth(name: string, envVars: readonly string[]): ApiKeyA
  * 延迟包装使提供商可以声明 OAuth 能力而不立即加载实现；首次 login、refresh 或 toAuth 时才加载。
  * 这样浏览器等 bundle 不会意外包含仅限 Node 的授权流程，且所有入口共享同一个加载 Promise。
  */
-export function lazyOAuth(input: { name: string; load: () => Promise<OAuthAuth> }): OAuthAuth {
+export function lazyOAuth(input: { name: string; loginLabel?: string; load: () => Promise<OAuthAuth> }): OAuthAuth {
 	let promise: Promise<OAuthAuth> | undefined;
 	const loaded = () => {
 		promise ??= input.load();
@@ -43,7 +43,8 @@ export function lazyOAuth(input: { name: string; load: () => Promise<OAuthAuth> 
 	};
 	return {
 		name: input.name,
-		login: async (callbacks) => (await loaded()).login(callbacks),
+		loginLabel: input.loginLabel,
+		login: async (interaction) => (await loaded()).login(interaction),
 		refresh: async (credential) => (await loaded()).refresh(credential),
 		toAuth: async (credential) => (await loaded()).toAuth(credential),
 	};

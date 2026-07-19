@@ -3,16 +3,9 @@
  * GitHub device flow 先获取长期 GitHub access token，再交换成短期 Copilot token；两者分别存入 refresh 与 access 字段。
  */
 
-import type { OAuthAuth, OAuthCredential } from "../../auth/types.ts";
 import { GITHUB_COPILOT_MODELS } from "../../providers/github-copilot.models.ts";
-import type { Api, Model } from "../../types.ts";
+import type { AuthInteraction, OAuthAuth, OAuthCredential } from "../types.ts";
 import { pollOAuthDeviceCodeFlow } from "./device-code.ts";
-import type { OAuthCredentials, OAuthDeviceCodeInfo, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.ts";
-
-type CopilotCredentials = OAuthCredentials & {
-	enterpriseUrl?: string;
-	availableModelIds: string[];
-};
 
 const decode = (s: string) => atob(s);
 const CLIENT_ID = decode("SXYxLmI1MDdhMDhjODdlY2ZlOTg=");
@@ -45,7 +38,7 @@ type DeviceTokenErrorResponse = {
 	interval?: number;
 };
 
-export function normalizeDomain(input: string): string | null {
+function normalizeDomain(input: string): string | null {
 	const trimmed = input.trim();
 	if (!trimmed) return null;
 	try {
@@ -83,7 +76,7 @@ function getBaseUrlFromToken(token: string): string | null {
 	return `https://${apiHost}`;
 }
 
-export function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: string): string {
+function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: string): string {
 	// If we have a token, extract the base URL from proxy-ep
 	// token 内的账户级路由最准确；只有旧 token 或解析失败时才回退到域名推导。
 	if (token) {
@@ -260,7 +253,7 @@ async function pollForGitHubAccessToken(
 async function refreshGitHubCopilotAccessToken(
 	refreshToken: string,
 	enterpriseDomain?: string,
-): Promise<OAuthCredentials> {
+): Promise<OAuthCredential> {
 	const domain = enterpriseDomain || "github.com";
 	const urls = getUrls(domain);
 
@@ -285,6 +278,7 @@ async function refreshGitHubCopilotAccessToken(
 	}
 
 	return {
+		type: "oauth",
 		refresh: refreshToken,
 		access: token,
 		// 提前五分钟视为过期，为时钟偏差和在途请求留出刷新余量。
@@ -297,10 +291,7 @@ async function refreshGitHubCopilotAccessToken(
  * Refresh GitHub Copilot token
  * 每次交换新 Copilot token 后同步刷新账户可选模型缓存，确保模型列表与当前授权策略一致。
  */
-export async function refreshGitHubCopilotToken(
-	refreshToken: string,
-	enterpriseDomain?: string,
-): Promise<OAuthCredentials> {
+async function refreshGitHubCopilotToken(refreshToken: string, enterpriseDomain?: string): Promise<OAuthCredential> {
 	const credentials = await refreshGitHubCopilotAccessToken(refreshToken, enterpriseDomain);
 	return {
 		...credentials,
@@ -340,72 +331,41 @@ async function enableGitHubCopilotModel(token: string, modelId: string, enterpri
  * Called after successful login to ensure all models are available.
  * 各模型并行尝试启用，随后仍以 /models 返回的实际可选集合为准。
  */
-async function enableAllGitHubCopilotModels(
-	token: string,
-	enterpriseDomain?: string,
-	onProgress?: (model: string, success: boolean) => void,
-): Promise<void> {
+async function enableAllGitHubCopilotModels(token: string, enterpriseDomain?: string): Promise<void> {
 	const models = Object.values(GITHUB_COPILOT_MODELS);
 	await Promise.all(
 		models.map(async (model) => {
-			const success = await enableGitHubCopilotModel(token, model.id, enterpriseDomain);
-			onProgress?.(model.id, success);
+			await enableGitHubCopilotModel(token, model.id, enterpriseDomain);
 		}),
 	);
 }
 
-/**
- * Login with GitHub Copilot OAuth (device code flow)
- *
- * @param options.onDeviceCode - Callback with URL and user code
- * @param options.onPrompt - Callback to prompt user for input
- * @param options.onProgress - Optional progress callback
- * @param options.signal - Optional AbortSignal for cancellation
- *
- * 取消信号在用户输入后和设备码轮询期间生效；获得 GitHub token 后再交换 Copilot token 并建立模型可用性缓存。
- */
-export async function loginGitHubCopilot(options: {
-	onDeviceCode: (info: OAuthDeviceCodeInfo) => void;
-	onPrompt: (prompt: { message: string; placeholder?: string; allowEmpty?: boolean }) => Promise<string>;
-	onProgress?: (message: string) => void;
-	signal?: AbortSignal;
-}): Promise<OAuthCredentials> {
-	const input = await options.onPrompt({
+async function loginGitHubCopilot(interaction: AuthInteraction): Promise<OAuthCredential> {
+	const input = await interaction.prompt({
+		type: "text",
 		message: "GitHub Enterprise URL/domain (blank for github.com)",
 		placeholder: "company.ghe.com",
-		allowEmpty: true,
 	});
-
-	if (options.signal?.aborted) {
-		throw new Error("Login cancelled");
-	}
+	if (interaction.signal?.aborted) throw new Error("Login cancelled");
 
 	const trimmed = input.trim();
 	const enterpriseDomain = normalizeDomain(input);
-	if (trimmed && !enterpriseDomain) {
-		throw new Error("Invalid GitHub Enterprise URL/domain");
-	}
+	if (trimmed && !enterpriseDomain) throw new Error("Invalid GitHub Enterprise URL/domain");
 	const domain = enterpriseDomain || "github.com";
 
 	const device = await startDeviceFlow(domain);
-	options.onDeviceCode({
+	interaction.notify({
+		type: "device_code",
 		userCode: device.user_code,
 		verificationUri: device.verification_uri,
 		intervalSeconds: device.interval,
 		expiresInSeconds: device.expires_in,
 	});
 
-	const githubAccessToken = await pollForGitHubAccessToken(domain, device, options.signal);
+	const githubAccessToken = await pollForGitHubAccessToken(domain, device, interaction.signal);
 	const credentials = await refreshGitHubCopilotAccessToken(githubAccessToken, enterpriseDomain ?? undefined);
-
-	// Enable all models after successful login
-	// 先尝试接受模型策略，再查询列表，避免刚启用的模型遗漏在持久化凭据中。
-	options.onProgress?.("Enabling models...");
+	interaction.notify({ type: "progress", message: "Enabling models..." });
 	await enableAllGitHubCopilotModels(credentials.access, enterpriseDomain ?? undefined);
-
-	// Fetch availability after policy enable so newly enabled models are included,
-	// while unavailable models are still filtered out.
-	// availableModelIds 是账户快照，用于后续从生成模型目录中过滤当前账户不可选项。
 	return {
 		...credentials,
 		availableModelIds: await fetchAvailableGitHubCopilotModelIds(credentials.access, enterpriseDomain ?? undefined),
@@ -420,72 +380,14 @@ function copilotEnterpriseDomain(credential: OAuthCredential): string | undefine
 
 export const githubCopilotOAuth: OAuthAuth = {
 	name: "GitHub Copilot",
+	login: loginGitHubCopilot,
+	refresh: (credential) => refreshGitHubCopilotToken(credential.refresh, copilotEnterpriseDomain(credential)),
 
-	async login(callbacks) {
-		const credentials = await loginGitHubCopilot({
-			onDeviceCode: (info) => callbacks.notify({ type: "device_code", ...info }),
-			onPrompt: (prompt) =>
-				callbacks.prompt({ type: "text", message: prompt.message, placeholder: prompt.placeholder }),
-			onProgress: (message) => callbacks.notify({ type: "progress", message }),
-			signal: callbacks.signal,
-		});
-		return { ...credentials, type: "oauth" };
-	},
-
-	async refresh(credential) {
-		return {
-			...(await refreshGitHubCopilotToken(credential.refresh, copilotEnterpriseDomain(credential))),
-			type: "oauth",
-		};
-	},
-
-	/**
-	 * Per-credential baseUrl from the token's proxy endpoint replaces the old `modifyModels` rewriting.
-	 * 每次请求鉴权都从当前凭据推导 baseUrl，避免模型对象持有刷新前 token 对应的旧路由。
-	 */
+	/** Derive the credential-specific proxy endpoint for each request. */
 	async toAuth(credential) {
 		return {
 			apiKey: credential.access,
 			baseUrl: getGitHubCopilotBaseUrl(credential.access, copilotEnterpriseDomain(credential)),
 		};
-	},
-};
-
-export const githubCopilotOAuthProvider: OAuthProviderInterface = {
-	id: "github-copilot",
-	name: "GitHub Copilot",
-
-	async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-		return loginGitHubCopilot({
-			onDeviceCode: callbacks.onDeviceCode,
-			onPrompt: callbacks.onPrompt,
-			onProgress: callbacks.onProgress,
-			signal: callbacks.signal,
-		});
-	},
-
-	async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-		const creds = credentials as CopilotCredentials;
-		return refreshGitHubCopilotToken(creds.refresh, creds.enterpriseUrl);
-	},
-
-	getApiKey(credentials: OAuthCredentials): string {
-		return credentials.access;
-	},
-
-	modifyModels(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[] {
-		const creds = credentials as CopilotCredentials;
-		const domain = creds.enterpriseUrl ? (normalizeDomain(creds.enterpriseUrl) ?? undefined) : undefined;
-		const baseUrl = getGitHubCopilotBaseUrl(creds.access, domain);
-		// Older stored Pi auth entries do not have account-specific model IDs yet;
-		// keep their existing generated-catalog behavior until the next refresh/login.
-		// 兼容旧凭据时不做模型过滤；下一次 refresh/login 会补齐 availableModelIds 并启用精确过滤。
-		const availableModelIds = "availableModelIds" in creds ? new Set(creds.availableModelIds) : undefined;
-
-		return models.flatMap((m) => {
-			if (m.provider !== "github-copilot") return [m];
-			if (availableModelIds && !availableModelIds.has(m.id)) return [];
-			return [{ ...m, baseUrl }];
-		});
 	},
 };

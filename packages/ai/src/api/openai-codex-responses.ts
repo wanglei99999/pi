@@ -37,6 +37,7 @@ import type {
 	Usage,
 } from "../types.ts";
 import { combineAbortSignals } from "../utils/abort-signals.ts";
+import { splitDeferredTools } from "../utils/deferred-tools.ts";
 import {
 	appendAssistantMessageDiagnostic,
 	createAssistantMessageDiagnostic,
@@ -82,10 +83,11 @@ const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
 // ============================================================================
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
-	reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on" | null;
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 	textVerbosity?: "low" | "medium" | "high";
+	toolChoice?: "auto" | "none" | "required";
 }
 
 type CodexResponseStatus = "completed" | "incomplete" | "failed" | "cancelled" | "queued" | "in_progress";
@@ -98,7 +100,7 @@ interface RequestBody {
 	previous_response_id?: string;
 	input?: ResponseInput;
 	tools?: OpenAITool[];
-	tool_choice?: "auto";
+	tool_choice?: OpenAICodexResponsesOptions["toolChoice"];
 	parallel_tool_calls?: boolean;
 	temperature?: number;
 	reasoning?: { effort?: string; summary?: string };
@@ -259,8 +261,9 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			if (nextBody !== undefined) {
 				body = nextBody as RequestBody;
 			}
-			const websocketRequestId = options?.sessionId || createCodexRequestId();
-			const sseHeaders = buildSSEHeaders(model.headers, options?.headers, accountId, apiKey, options?.sessionId);
+			const codexSessionId = clampOpenAIPromptCacheKey(options?.sessionId);
+			const websocketRequestId = codexSessionId || createCodexRequestId();
+			const sseHeaders = buildSSEHeaders(model.headers, options?.headers, accountId, apiKey, codexSessionId);
 			const websocketHeaders = buildWebSocketHeaders(
 				model.headers,
 				options?.headers,
@@ -487,8 +490,10 @@ function buildRequestBody(
 	context: Context,
 	options?: OpenAICodexResponsesOptions,
 ): RequestBody {
+	const toolPlacement = splitDeferredTools(context, model.compat?.supportsToolSearch ?? false);
 	const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
 		includeSystemPrompt: false,
+		deferredTools: toolPlacement.deferred,
 	});
 	// Codex 将系统提示词放在 instructions，input 只承载可重放的会话项，避免重复注入 system 消息。
 
@@ -502,7 +507,7 @@ function buildRequestBody(
 		include: ["reasoning.encrypted_content"],
 		// 请求加密推理内容，使后续轮次能够回放签名后的 reasoning item，而不暴露内部思维文本。
 		prompt_cache_key: clampOpenAIPromptCacheKey(options?.sessionId),
-		tool_choice: "auto",
+		tool_choice: options?.toolChoice ?? "auto",
 		parallel_tool_calls: true,
 	};
 
@@ -514,8 +519,8 @@ function buildRequestBody(
 		body.service_tier = options.serviceTier;
 	}
 
-	if (context.tools && context.tools.length > 0) {
-		body.tools = convertResponsesTools(context.tools, { strict: null });
+	if (toolPlacement.immediate.length > 0) {
+		body.tools = convertResponsesTools(toolPlacement.immediate, { strict: null });
 	}
 
 	if (options?.reasoningEffort !== undefined) {

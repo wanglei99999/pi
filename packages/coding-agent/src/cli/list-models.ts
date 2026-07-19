@@ -7,7 +7,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import { formatNoModelsAvailableMessage } from "../core/auth-guidance.ts";
-import type { ModelRegistry } from "../core/model-registry.ts";
+import type { ModelRuntime } from "../core/model-runtime.ts";
 
 /**
  * Format a number as human-readable (e.g., 200000 -> "200K", 1000000 -> "1M")
@@ -29,15 +29,13 @@ function formatTokenCount(count: number): string {
  * List available models, optionally filtered by search pattern
  * 输出可用模型表，并可按搜索模式过滤。
  */
-export async function listModels(modelRegistry: ModelRegistry, searchPattern?: string): Promise<void> {
-	const loadError = modelRegistry.getError();
-	// 自定义 models.json 加载失败只显示警告；注册表仍可能提供可用的内置模型。
+export async function listModels(modelRuntime: ModelRuntime, searchPattern?: string): Promise<void> {
+	const loadError = modelRuntime.getError();
 	if (loadError) {
 		console.error(chalk.yellow(`Warning: errors loading models.json:\n${loadError}`));
 	}
 
-	const models = modelRegistry.getAvailable();
-	// getAvailable 只检查是否配置了认证来源，不刷新 OAuth token，也不执行真实请求验证。
+	const models = [...(await modelRuntime.getAvailable())];
 
 	if (models.length === 0) {
 		console.log(formatNoModelsAvailableMessage());
