@@ -22,6 +22,10 @@ export class InMemoryCodingAgentModelsStore implements ModelsStore {
 }
 
 /** Locked JSON-backed storage for dynamically refreshed provider catalogs. */
+/**
+ * 动态模型目录的文件持久化（默认 ~/.pi/agent/models-store.json）。
+ * 复用 auth-storage 的文件锁后端：多个 pi 进程同时刷新目录时读改写不互相覆盖。
+ */
 export class FileModelsStore implements ModelsStore {
 	private readonly storage: AuthStorageBackend;
 

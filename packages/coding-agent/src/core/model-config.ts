@@ -1,4 +1,8 @@
 /** Immutable, credential-blind models.json snapshot. */
+/**
+ * models.json 的不可变快照：只做"读文件 → 校验 schema → 深冻结"，不碰凭证、不组合模型。
+ * 组合逻辑在 provider-composer.ts，装配和刷新在 model-runtime.ts——三个文件各管一层。
+ */
 
 import { readFile } from "node:fs/promises";
 import { type Static, Type } from "typebox";
@@ -225,6 +229,12 @@ function deepFreeze<T>(value: T): T {
 }
 
 /** One immutable load of models.json. */
+/**
+ * 一次 models.json 加载的结果。三类失败（读文件、JSON 解析、schema 校验）都不抛出，
+ * 而是返回携带错误信息的空配置——models.json 坏了不能影响内置模型可用，
+ * 错误经 getError() 冒泡到 UI 显示为警告。文件不存在是正常情况（返回干净的空配置）。
+ * deepFreeze 保证快照真正只读；重载走 ModelRuntime.reloadConfig() 整体换新实例。
+ */
 export class ModelConfig {
 	private readonly providers: ReadonlyMap<string, ModelsJsonProvider>;
 	private readonly error: string | undefined;

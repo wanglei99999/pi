@@ -256,6 +256,8 @@ function mergeHeaders(
 	return merged;
 }
 
+// Models 接口的默认实现：providers 表 + 三个可注入依赖（凭证存储、目录存储、认证上下文），
+// 默认全用内存实现，持久化由应用（如 coding-agent 的 ModelRuntime）注入。
 class ModelsImpl implements MutableModels {
 	private providers = new Map<string, Provider>();
 	private credentials: CredentialStore;
@@ -316,6 +318,9 @@ class ModelsImpl implements MutableModels {
 	}
 
 	async refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
+		// 逐 provider 并发刷新。每个 provider 只拿到限定自己 ID 的 store 视图；
+		// 刷新前先解析生效凭据（OAuth 过期则先刷新），未配置的 provider 直接跳过。
+		// 失败进 errors 映射而不 reject，随后降级为 allowNetwork:false 再跑一次，尽力从本地缓存恢复目录。
 		const allowNetwork = options.allowNetwork ?? true;
 		const errors = new Map<string, Error>();
 		const refreshable = Array.from(this.providers.values()).filter(
@@ -369,6 +374,8 @@ class ModelsImpl implements MutableModels {
 		return { aborted: options.signal?.aborted ?? false, errors };
 	}
 
+	// 刷新用的生效凭据：OAuth 过期时在 credentials.modify 的锁内二次检查并刷新（防止并发重复刷新）；
+	// API key 则跑 provider 的 resolve，把存储凭证与环境来源合并成完整凭据。返回 undefined = 未配置，跳过刷新。
 	private async resolveRefreshCredential(
 		provider: Provider,
 		stored: Credential | undefined,
@@ -403,6 +410,7 @@ class ModelsImpl implements MutableModels {
 		}
 	}
 
+	// 无副作用的认证检查：优先用 provider 自带的 check（不执行命令），否则退化为真实 resolve。
 	private async checkProviderAuth(
 		provider: Provider,
 		credential: Credential | undefined,
@@ -443,6 +451,7 @@ class ModelsImpl implements MutableModels {
 				return { provider, credential, auth: await this.checkProviderAuth(provider, credential) };
 			}),
 		);
+		// 认证未配置的 provider 贡献空列表；已配置的还可经 filterModels 按凭证再过滤一轮。
 		return checks.flatMap(({ provider, credential, auth }) => {
 			if (!auth) return [];
 			const models = provider.getModels();
@@ -479,6 +488,7 @@ class ModelsImpl implements MutableModels {
 		}
 		const credential = await method.login(interaction);
 		try {
+			// 登录结果也走 modify 这一唯一写入口持久化，与并发的 OAuth 刷新共享同一串行化边界。
 			await this.credentials.modify(providerId, async () => credential);
 		} catch (error) {
 			throw new ModelsError("auth", `Credential store modify failed for ${providerId}`, { cause: error });

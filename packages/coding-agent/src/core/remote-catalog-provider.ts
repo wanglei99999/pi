@@ -30,6 +30,12 @@ function parseCatalog(providerId: string, value: unknown): Model<Api>[] {
 }
 
 /** Add a persisted pi.dev catalog overlay to a static built-in provider. */
+/**
+ * 给静态内置 provider 叠加一层 pi.dev 远端目录：新模型/价格变化无需发版就能下发。
+ * refreshModels 的流程：先从本地存储恢复上次结果（离线也有目录）→ 4 小时内不重复拉取
+ * （force 可绕过）→ 拉取成功才替换并落盘；404/501 表示该 provider 无远端目录，只更新时间戳。
+ * inflightRefresh 用 `??=` 合并并发刷新（JS 语法点：空值合并赋值，仅在左侧为 null/undefined 时求值右侧）。
+ */
 export function withRemoteCatalog(provider: Provider, catalogBaseUrl: string = DEFAULT_CATALOG_BASE_URL): Provider {
 	let dynamicModels: readonly Model<Api>[] = [];
 	let inflightRefresh: Promise<void> | undefined;

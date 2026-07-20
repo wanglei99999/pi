@@ -7,6 +7,7 @@ export interface ModelsStoreEntry {
 }
 
 /** Persistent model catalogs keyed by provider ID. */
+/** 以 provider ID 为键的动态模型目录持久化接口；应用注入实现（pi CLI 用 models-store.json 文件）。 */
 export interface ModelsStore {
 	read(providerId: string): Promise<ModelsStoreEntry | undefined>;
 	write(providerId: string, entry: ModelsStoreEntry): Promise<void>;
@@ -14,6 +15,7 @@ export interface ModelsStore {
 }
 
 /** ModelsStore scoped to one provider. Providers cannot access other providers' catalogs. */
+/** 限定到单个 provider 的视图：refreshModels 拿到的是这个，读写不了别家的目录。 */
 export interface ProviderModelsStore {
 	read(): Promise<ModelsStoreEntry | undefined>;
 	write(entry: ModelsStoreEntry): Promise<void>;

@@ -47,6 +47,8 @@ import {
 import { withRemoteCatalog } from "./remote-catalog-provider.ts";
 import { RuntimeCredentials } from "./runtime-credentials.ts";
 
+// 面向 UI 的同步快照：认证检查是异步的，选择器/页脚等组件不能每次渲染都跑一遍，
+// 因此把"全部模型/可用模型/各 provider 认证状态"缓存成不可变对象，异步刷新后整体替换。
 interface ModelRuntimeSnapshot {
 	all: readonly Model<Api>[];
 	available: readonly Model<Api>[];
@@ -89,6 +91,13 @@ function mergeHeaders(
 }
 
 /** Configured pi-ai Models collection used by coding-agent and SDK consumers. */
+/**
+ * coding-agent 与 SDK 使用的、已配置好的 pi-ai Models 集合。
+ * 这是旧 ModelRegistry/AuthStorage 组合的替代者：认证解析与流式分发都委托给 pi-ai 的
+ * Models（this.models），本类只负责 coding-agent 特有的四层 provider 组合
+ * （内置 catalog → models.json → 扩展 registerProvider → 原生扩展 Provider）、
+ * 运行时密钥覆盖、以及供 TUI 同步读取的可用性快照。
+ */
 export class ModelRuntime implements Models {
 	private readonly models: MutableModels;
 	private readonly credentials: RuntimeCredentials;
@@ -129,6 +138,8 @@ export class ModelRuntime implements Models {
 	}
 
 	static async create(options: CreateModelRuntimeOptions = {}): Promise<ModelRuntime> {
+		// 装配顺序：凭证存储（auth.json 外包一层运行时覆盖）→ models.json 快照 →
+		// 动态目录持久化（models-store.json）→ 内置 provider 包上 pi.dev 远端目录 → 首次 refresh。
 		const credentials = new RuntimeCredentials(options.credentials ?? DefaultAuthStorage.create(options.authPath));
 		const modelsPath =
 			options.modelsPath === null ? undefined : (options.modelsPath ?? join(getAgentDir(), "models.json"));
@@ -153,6 +164,8 @@ export class ModelRuntime implements Models {
 		);
 		runtime.configureRadiusProviders();
 		runtime.rebuildProviders();
+		// 首次刷新有 15s 超时兜底：网络卡住时中止请求，CLI 启动不被模型目录拖死；
+		// 离线模式（PI_OFFLINE）只从本地缓存恢复目录，不发网络请求。
 		const controller = new AbortController();
 		const timeout = runtime.allowModelNetwork
 			? setTimeout(() => controller.abort(), options.modelRefreshTimeoutMs ?? 15_000)
@@ -165,6 +178,8 @@ export class ModelRuntime implements Models {
 		return runtime;
 	}
 
+	// models.json 里 oauth: "radius" 的条目不是覆盖现有 provider，而是以 radius 网关为后端
+	// 生成一个全新的内置 provider（自带 OAuth 登录），因此要在组合层之前先注入 builtins。
 	private configureRadiusProviders(): void {
 		this.builtins.clear();
 		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
@@ -191,6 +206,8 @@ export class ModelRuntime implements Models {
 		]);
 	}
 
+	// 单个 provider 的四层组合：base（原生扩展 Provider 优先于内置）+ models.json + 扩展注册配置。
+	// 组合失败不让整个运行时垮掉：记录错误并回退到未加工的 base（或删除该 provider）。
 	private recomposeProvider(providerId: string): void {
 		const base = this.nativeExtensionProviders.get(providerId) ?? this.builtins.get(providerId);
 		const extension = this.extensionProviders.get(providerId);
@@ -201,6 +218,7 @@ export class ModelRuntime implements Models {
 		}
 		if (base && !this.config.getProvider(providerId) && !extension) {
 			// No overlays: use the builtin untouched so its auth/login/stream behavior is exact.
+			// 没有任何覆盖层时直接用原始内置实现，保证其认证/登录/流式行为分毫不差。
 			this.models.setProvider(base);
 			this.compositionErrors.delete(providerId);
 			return;
@@ -231,6 +249,7 @@ export class ModelRuntime implements Models {
 		};
 	}
 
+	// 重算快照：并发拉取可用模型、逐 provider 认证检查和凭证列表，然后原子替换 this.snapshot。
 	private async runAvailabilityRefresh(): Promise<void> {
 		const providers = this.models.getProviders();
 		const [available, checks, credentials] = await Promise.all([
@@ -275,11 +294,13 @@ export class ModelRuntime implements Models {
 	}
 
 	/** Coalesce concurrent readers onto the pending refresh. */
+	/** 读路径：并发读者共享同一个进行中的刷新，不重复发起。 */
 	private refreshAvailability(): Promise<void> {
 		return this.availabilityRefresh ?? this.queueAvailabilityRefresh(undefined);
 	}
 
 	/** Mutations must not observe an in-flight refresh started before them. */
+	/** 写路径：变更后必须排在旧刷新之后再刷一次，否则可能读到变更前启动的过期结果。 */
 	private forceRefreshAvailability(): Promise<void> {
 		return this.queueAvailabilityRefresh(this.availabilityRefresh);
 	}
@@ -371,6 +392,8 @@ export class ModelRuntime implements Models {
 		providerOrModel: string | Model<Api>,
 		overrides: ModelRuntimeAuthOverrides = {},
 	): Promise<AuthResult | undefined> {
+		// 传入模型时，在 pi-ai 解析结果之上再叠加 models.json/扩展配置的模型级 header
+		//（可引用环境变量，因此要在解析出 env 之后才展开）。
 		if (typeof providerOrModel === "string") return this.models.getAuth(providerOrModel, overrides);
 		const resolution = await this.models.getAuth(providerOrModel, overrides);
 		if (!resolution) return undefined;
@@ -390,6 +413,7 @@ export class ModelRuntime implements Models {
 	}
 
 	async setRuntimeApiKey(providerId: string, apiKey: string): Promise<void> {
+		// 先乐观更新快照（--api-key 场景要求模型立即可选），异步 refresh 随后校正。
 		this.credentials.setRuntimeApiKey(providerId, apiKey);
 		const auth = new Map(this.snapshot.auth).set(providerId, { type: "api_key", source: "runtime API key" });
 		const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);
@@ -425,6 +449,8 @@ export class ModelRuntime implements Models {
 		return check ? { configured: true, source: "environment", label: check.source } : { configured: false };
 	}
 
+	// 与 pi-ai ModelsImpl.applyAuth 同构，但走本类的 getAuth 以叠加模型级配置 header：
+	// 解析认证 → 合并 header（transformHeaders 最后执行）→ 凭证级 baseUrl 覆盖模型。
 	private async prepareRequest(
 		model: Model<Api>,
 		options: (StreamOptions & ModelsStreamTransforms) | undefined,
@@ -499,6 +525,8 @@ export class ModelRuntime implements Models {
 	async logout(providerId: string): Promise<void> {
 		await this.models.logout(providerId);
 		// Reset credential-dependent compatibility projections before the unconfigured provider is skipped by refresh.
+		// 登出后先重组该 provider，清掉依赖凭证的模型投影（如 OAuth modifyModels 的 baseUrl 改写）；
+		// 否则 refresh 会因 provider 未配置而跳过它，过期投影就残留下来了。
 		this.recomposeProvider(providerId);
 		await this.refresh({ allowNetwork: this.allowModelNetwork });
 	}
@@ -542,6 +570,7 @@ export class ModelRuntime implements Models {
 	registerProvider(providerId: string, config: ProviderConfigInput): void {
 		// Validate the incoming registration on its own, like the legacy registry:
 		// a broken re-registration must throw without touching the stored config.
+		// 与旧 ModelRegistry 契约一致：先独立校验本次注册，坏配置直接抛错、不污染已存配置。
 		validateExtensionProvider(providerId, this.builtins.get(providerId), this.config.getProvider(providerId), config);
 		this.nativeExtensionProviders.delete(providerId);
 		// Re-registration merges defined values over the previous registration and
@@ -561,6 +590,7 @@ export class ModelRuntime implements Models {
 			const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);
 			const auth = new Map(this.snapshot.auth);
 			// Provisional entry until the async refresh lands; never clobber a real check result.
+			// 异步刷新落地前先放一个临时认证条目，让注册的 provider 立即可用；已有真实检查结果时绝不覆盖。
 			if (!auth.get(providerId)) {
 				auth.set(providerId, {
 					type: effective.oauth && !effective.apiKey ? "oauth" : "api_key",
