@@ -4,7 +4,7 @@
 >
 > 所有 `文件:行号` 引用基于 commit `3f9aa5d1`（2026-07 的 main 分支）。文中代码路径均相对仓库根目录。
 >
-> **⚠️ v0.80.10 更新（2026-07-20）**：上游重构了模型/认证子系统——pi-ai 新增有状态运行时（`Provider`/`Models`/`CredentialStore`），coding-agent 的 ModelRegistry/AuthStorage 组合被 `ModelRuntime` 取代。涉及本篇第 4、5 章的鉴权与模型目录描述；具体勘误见 02、03 篇开头的更新说明。
+> **⚠️ v0.80.10 更新（2026-07-20）**：上游重构了模型/认证子系统——pi-ai 新增有状态运行时（`Provider`/`Models`/`CredentialStore`），coding-agent 的 ModelRegistry/AuthStorage 组合被 `ModelRuntime` 取代。涉及本篇第 4、5 章的鉴权与模型目录描述；02 篇（§2.2/2.3、§5、§10）和 03 篇（第 2、10 章）已按新架构修订，读那两篇即可获得当前准确版本。
 
 ## 目录
 
