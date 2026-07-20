@@ -31,10 +31,12 @@ function formatTokenCount(count: number): string {
  */
 export async function listModels(modelRuntime: ModelRuntime, searchPattern?: string): Promise<void> {
 	const loadError = modelRuntime.getError();
+	// 自定义 models.json 加载失败只显示警告；运行时仍可能提供可用的内置模型。
 	if (loadError) {
 		console.error(chalk.yellow(`Warning: errors loading models.json:\n${loadError}`));
 	}
 
+	// getAvailable 只检查是否配置了认证来源，不刷新 OAuth token，也不执行真实请求验证。
 	const models = [...(await modelRuntime.getAvailable())];
 
 	if (models.length === 0) {

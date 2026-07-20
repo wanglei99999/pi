@@ -1,6 +1,8 @@
 /**
  * CredentialStore implementation backed by auth.json.
  * Provider auth orchestration belongs to ModelRuntime and pi-ai Models.
+ * 基于 auth.json 的 CredentialStore 实现；文件锁保证多个 pi 进程并发读写凭证时不会互相覆盖。
+ * 提供商认证的编排逻辑已上移至 ModelRuntime 与 pi-ai 的 Models。
  */
 
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
@@ -270,6 +272,7 @@ export function readStoredCredential(
 		const data = JSON.parse(readFileSync(normalizePath(authPath), "utf-8")) as AuthStorageData;
 		return data[providerId];
 	} catch {
+		// 文件缺失或损坏时按无凭证处理。
 		return undefined;
 	}
 }

@@ -16,6 +16,7 @@ export { clearApiKeyCache } from "./provider-composer.ts";
 /**
  * Synchronous compatibility facade exposed to extensions.
  * Coding-agent internals use ModelRuntime directly.
+ * 面向扩展的同步兼容外观；coding-agent 内部直接使用 ModelRuntime。
  */
 export class ModelRegistry {
 	private readonly runtime: ModelRuntime;
@@ -54,6 +55,7 @@ export class ModelRegistry {
 			const resolution = await this.runtime.getAuth(model);
 			if (!resolution) {
 				const compatibility = this.runtime.getCompatibilityRequestConfig(model);
+				// authHeader 由注册配置显式启用，避免对已有自定义鉴权 header 的 provider 擅自注入 Bearer。
 				if (compatibility.authHeader) {
 					return { ok: false, error: `No API key found for "${model.provider}"` };
 				}

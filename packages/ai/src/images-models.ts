@@ -90,6 +90,7 @@ export interface ImagesModels {
 
 	/**
 	 * Resolve request auth by provider id or image model. Same contract as
+	 * 为图片模型解析请求认证，契约与
 	 * `Models.getAuth()`: undefined when unknown/unconfigured, rejects with
 	 * `Models.getAuth()` 相同：未知或未配置时返回 undefined，真实认证失败时
 	 * `ModelsError` ("oauth"/"auth") on real failures.

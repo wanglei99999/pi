@@ -20,6 +20,7 @@ import type { RegisteredTool } from "./types.ts";
  * 每次执行通过 runner.createContext() 获取当前上下文，使工具和事件处理器看到一致的会话能力。
  */
 export function wrapRegisteredTool(registeredTool: RegisteredTool, runner: ExtensionRunner): AgentTool {
+	// 仅把 definition 交给通用包装器；来源、注册信息和拦截生命周期仍由扩展运行时管理。
 	const tool = wrapToolDefinition(registeredTool.definition, () => runner.createContext());
 	const execute = tool.execute;
 	return {

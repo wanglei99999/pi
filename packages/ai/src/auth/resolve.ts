@@ -68,6 +68,7 @@ export async function resolveProviderAuth(
 	}
 
 	// Ambient (env vars, AWS profiles, ADC files).
+	// 外部认证来源（环境变量、AWS 配置文件、ADC 文件）。
 	return provider.auth.apiKey
 		? resolveApiKey(requestAuthContext, provider.auth.apiKey, provider.id, undefined)
 		: undefined;

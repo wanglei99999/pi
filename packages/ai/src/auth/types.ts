@@ -31,6 +31,7 @@ export interface OAuthCredentials {
 }
 
 /** Stored canonical OAuth credential. */
+/** 持久化的规范 OAuth 凭证，沿用 OAuthCredentials 的访问令牌、刷新令牌与过期时间结构。 */
 export interface OAuthCredential extends OAuthCredentials {
 	type: "oauth";
 }

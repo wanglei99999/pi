@@ -734,6 +734,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					// Only update usage fields if present (not null).
 					// Preserves input_tokens from message_start when proxies omit it in message_delta.
 					if (event.usage) {
+						// 仅用非空字段更新统计，避免代理在 message_delta 省略字段时覆盖 message_start 的输入令牌数。
 						if (event.usage.input_tokens != null) {
 							output.usage.input = event.usage.input_tokens;
 						}
@@ -749,6 +750,8 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 						// Anthropic reports reasoning tokens in `output_tokens_details.thinking_tokens` on the
 						// final message_delta usage (a subset of output_tokens). SDK 0.91.1 omits the field from
 						// its Usage type, so read it through a narrow cast. Verified against the live API.
+						// 推理令牌位于最终 message_delta 的 output_tokens_details.thinking_tokens，且属于 output_tokens 子集；
+						// 当前 SDK 类型尚未声明该字段，因此用窄类型断言读取，字段结构已通过真实 API 验证。
 						const thinkingTokens = (event.usage as { output_tokens_details?: { thinking_tokens?: number } })
 							.output_tokens_details?.thinking_tokens;
 						if (thinkingTokens != null) {
@@ -794,6 +797,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
  * Map ThinkingLevel to Anthropic effort levels for adaptive thinking.
  * Note: effort "max" is available on all adaptive-thinking Claude models, while native
  * "xhigh" is only available on Opus 4.7/4.8, Sonnet 5, and Fable 5.
+ * 将通用 ThinkingLevel 映射到 Anthropic 自适应推理级别；max 与 xhigh 的支持范围随模型版本不同。
  */
 function mapThinkingLevelToEffort(
 	model: Model<"anthropic-messages">,
@@ -1211,6 +1215,8 @@ function convertMessages(
 					// If thinking signature is missing/empty (e.g., from aborted stream),
 					// convert to plain text for Anthropic. Some compatible providers emit
 					// and accept empty signatures, so let marked models preserve the block.
+					// 推理签名缺失时，Anthropic 重放会失败，因此默认降级为普通文本；
+					// 明确标记兼容的提供商可保留空签名推理块。
 					if (!hasThinkingSignature) {
 						blocks.push(
 							allowEmptySignature
@@ -1247,6 +1253,7 @@ function convertMessages(
 			});
 		} else if (msg.role === "toolResult") {
 			// Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint.
+			// 收集连续工具结果并合并发送，以兼容 z.ai 的 Anthropic 端点约束。
 			const toolResults: ContentBlockParam[] = [];
 			const siblingContent: ContentBlockParam[] = [];
 			let j = i;
@@ -1264,6 +1271,7 @@ function convertMessages(
 			}
 
 			// Skip the messages we've already processed.
+			// 推进外层索引，跳过已合并的消息。
 			i = j - 1;
 
 			// Displaced reference-bearing results must follow every tool_result block.

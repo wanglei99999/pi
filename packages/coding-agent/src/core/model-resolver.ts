@@ -429,6 +429,8 @@ export function resolveCliModel(options: {
 
 	// Important: use *all* models here, not just models with pre-configured auth.
 	// This allows "--api-key" to be used for first-time setup.
+	// 注意：这里使用所有模型，而不仅是已预配置认证的模型，
+	// 以便首次设置时可以使用 "--api-key"。
 	const availableModels = [...modelRuntime.getModels()];
 	if (availableModels.length === 0) {
 		return {
@@ -682,6 +684,7 @@ export async function findInitialModel(options: {
 	}
 
 	// 4. Try first available model with valid API key
+	// 4. 尝试首个具有有效 API 密钥的可用模型。
 	const availableModels = [...(await modelRuntime.getAvailable())];
 
 	if (availableModels.length > 0) {
@@ -719,6 +722,7 @@ export async function restoreModelFromSession(
 	const restoredModel = modelRuntime.getModel(savedProvider, savedModelId);
 
 	// Check if restored model exists and still has auth configured
+	// 检查待恢复模型是否存在且仍配置了认证。
 	const hasConfiguredAuth = restoredModel ? modelRuntime.hasConfiguredAuth(restoredModel.provider) : false;
 
 	if (restoredModel && hasConfiguredAuth) {
@@ -749,6 +753,7 @@ export async function restoreModelFromSession(
 	}
 
 	// Try to find any available model
+	// 尝试查找任意可用模型。
 	const availableModels = [...(await modelRuntime.getAvailable())];
 
 	if (availableModels.length > 0) {

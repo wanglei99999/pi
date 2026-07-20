@@ -334,6 +334,7 @@ export interface ExtensionContext {
 	/** Session manager (read-only) */
 	sessionManager: ReadonlySessionManager;
 	/** Model registry for API key resolution */
+	/** 用于解析 API 密钥的模型注册表 */
 	modelRegistry: ModelRegistry;
 	/** Current model (may be undefined) */
 	model: Model<any> | undefined;

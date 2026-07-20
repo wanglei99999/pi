@@ -134,6 +134,7 @@ export class AssistantMessageComponent extends Container {
 
 				if (this.hideThinkingBlock) {
 					// Show one static label for each run of thinking blocks when hidden.
+					// 隐藏思考内容时显示静态标签，同时保留它在消息内容顺序中的位置。
 					this.contentContainer.addChild(
 						new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0),
 					);

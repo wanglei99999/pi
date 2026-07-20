@@ -23,6 +23,7 @@ const modelRuntime = await ModelRuntime.create({
 	authPath: "/tmp/my-agent/auth.json",
 	modelsPath: "/tmp/my-agent/models.json",
 });
+// 从环境变量注入运行时密钥(不落盘)
 if (process.env.MY_ANTHROPIC_KEY) {
 	modelRuntime.setRuntimeApiKey("anthropic", process.env.MY_ANTHROPIC_KEY);
 }

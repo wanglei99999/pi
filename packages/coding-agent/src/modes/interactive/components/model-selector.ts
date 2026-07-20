@@ -175,6 +175,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			timedOut = true;
 			this.refreshAbortController.abort();
 		}, timeoutMs);
+		// 刷新模型列表以读取最新的 provider 状态；models.json 失败时内置模型仍可工作。
 		try {
 			const result = await this.modelRuntime.refresh({ signal: this.refreshAbortController.signal });
 			if (this.closed) return;

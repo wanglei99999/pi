@@ -155,6 +155,7 @@ export class FooterComponent implements Component {
 			statsParts.push(`CH${latestCacheHitRate.toFixed(1)}%`);
 		}
 		// Kimi Coding is subscription-backed despite using API-key authentication.
+		// OAuth 订阅模型显示 `(sub)`，即使本地成本为零也保留订阅状态。
 		const usingSubscription = state.model
 			? state.model.provider === "kimi-coding" || this.session.modelRuntime.isUsingOAuth(state.model.provider)
 			: false;

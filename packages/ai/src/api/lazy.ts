@@ -33,6 +33,7 @@ async function forwardStream(
 	target: AssistantMessageEventStream,
 	source: AsyncIterable<AssistantMessageEvent>,
 ): Promise<void> {
+	// 保持内部事件顺序，并在内部流耗尽后才结束同步返回给调用方的外层流。
 	for await (const event of source) {
 		target.push(event);
 	}

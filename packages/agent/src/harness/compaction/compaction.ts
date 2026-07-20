@@ -156,10 +156,13 @@ export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | unde
 export interface ContextUsageEstimate {
 	/** Estimated total context tokens. */
 	tokens: number;
+	// 最近一次助手 usage 块报告的 token 数。
 	/** Tokens reported by the most recent assistant usage block. */
 	usageTokens: number;
+	// 最近一次助手 usage 块之后新增内容的估算 token 数。
 	/** Estimated tokens after the most recent assistant usage block. */
 	trailingTokens: number;
+	// 提供 usage 的消息索引；不存在时为 null。
 	/** Index of the message that provided usage, or null when none exists. */
 	lastUsageIndex: number | null;
 }

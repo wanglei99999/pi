@@ -21,12 +21,14 @@ if (opus) {
 }
 
 // Option 2: Find model via registry (includes custom models from models.json)
+// 方式 2:走 ModelRuntime,内置 + models.json 自定义模型都能查到
 const customModel = modelRuntime.getModel("my-provider", "my-model");
 if (customModel) {
 	console.log(`Found custom model: ${customModel.provider}/${customModel.id}`);
 }
 
 // Option 3: Pick from available models (have valid API keys)
+// 方式 3:列出"当前有有效密钥"的模型,适合运行时自动选型
 const available = await modelRuntime.getAvailable();
 console.log(
 	"Available models:",
@@ -37,6 +39,7 @@ if (available.length > 0) {
 	const { session } = await createAgentSession({
 		model: available[0],
 		thinkingLevel: "medium", // off, low, medium, high
+		// thinkingLevel:推理力度档位,映射到各 provider 的思考预算参数
 		modelRuntime,
 	});
 

@@ -323,6 +323,7 @@ export function convertResponsesTools(tools: readonly Tool[], options?: ConvertR
 			name: tool.name,
 			description: tool.description,
 			parameters: tool.parameters as Record<string, unknown>, // TypeBox already generates JSON Schema
+			// TypeBox 已生成 JSON Schema；此处只适配 SDK 的参数类型声明。
 			strict,
 			...(options?.deferLoading ? { defer_loading: true } : {}),
 		}),
@@ -440,6 +441,7 @@ export async function processResponsesStream<TApi extends Api>(
 			const cacheWriteTokens = inputDetails?.cache_write_tokens || 0;
 			output.usage = {
 				// OpenAI includes cached and cache-write tokens in input_tokens, so subtract both.
+				// OpenAI 的 input_tokens 已包含缓存读取与缓存写入量；两者都扣除后才是应按普通输入计费的 token。
 				input: Math.max(0, (response.usage.input_tokens || 0) - cachedTokens - cacheWriteTokens),
 				output: response.usage.output_tokens || 0,
 				cacheRead: cachedTokens,
@@ -561,6 +563,7 @@ export async function processResponsesStream<TApi extends Api>(
 				slot.block.thinking = summaryText || contentText || slot.block.thinking;
 				slot.block.thinkingSignature = JSON.stringify(item);
 				reasoningBlocksById.set(item.id, slot.block);
+				// 推理正文用于展示，完整 item 则作为不透明签名保存，供后续同模型会话重放。
 				stream.push({
 					type: "thinking_end",
 					contentIndex: slot.contentIndex,

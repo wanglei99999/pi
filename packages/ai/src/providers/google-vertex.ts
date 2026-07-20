@@ -68,6 +68,7 @@ const vertexAuth: ApiKeyAuth = {
 
 		const adcPath =
 			credential?.env?.GOOGLE_APPLICATION_CREDENTIALS ?? (await ctx.env("GOOGLE_APPLICATION_CREDENTIALS"));
+		// ADC 只有在凭据文件、project 和 location 同时可用时才视为已配置，避免列表展示无法请求的模型。
 		const hasCredentials = await ctx.fileExists(adcPath ?? VERTEX_ADC_PATH);
 		const project =
 			credential?.env?.GOOGLE_CLOUD_PROJECT ??

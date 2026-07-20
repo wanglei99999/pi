@@ -63,6 +63,7 @@ export function estimateMessageTokens(message: Message): number {
 }
 
 function getLastAssistantUsageInfo(messages: readonly Message[]): { usage: Usage; index: number } | undefined {
+	// 找到最近一次成功响应的实际 usage 作为基线，避免累计重复估算此前上下文。
 	let latestPrefixTimestamp = Number.NEGATIVE_INFINITY;
 	let usageInfo: { usage: Usage; index: number } | undefined;
 

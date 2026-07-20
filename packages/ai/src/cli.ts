@@ -18,6 +18,7 @@ function prompt(rl: ReturnType<typeof createInterface>, question: string): Promi
 }
 
 function loadAuth(): Record<string, OAuthCredential> {
+	// 缺失或损坏的本地文件按空存储处理，登录流程可直接重建而无需迁移步骤。
 	if (!existsSync(AUTH_FILE)) return {};
 	try {
 		return JSON.parse(readFileSync(AUTH_FILE, "utf-8")) as Record<string, OAuthCredential>;
@@ -27,6 +28,7 @@ function loadAuth(): Record<string, OAuthCredential> {
 }
 
 function saveAuth(auth: Record<string, OAuthCredential>): void {
+	// 此独立 CLI 使用简单本地 JSON 存储；嵌入式应用应使用自身的凭据存储实现。
 	writeFileSync(AUTH_FILE, JSON.stringify(auth, null, 2), "utf-8");
 }
 
@@ -69,6 +71,7 @@ async function login(providerId: string): Promise<void> {
 			},
 		});
 		const auth = loadAuth();
+		// 仅替换当前提供商条目，保留其他提供商的已有凭据。
 		auth[providerId] = credential;
 		saveAuth(auth);
 		console.log(`\nCredentials saved to ${AUTH_FILE}`);

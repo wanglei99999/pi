@@ -199,11 +199,11 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 				case "assistant":
 				case "toolResult":
 					return m;
-				default:
-					// biome-ignore lint/correctness/noSwitchDeclarations: fine
+				default: {
 					// 穷尽检查确保新增自定义消息角色时必须同步更新模型转换逻辑。
 					const _exhaustiveCheck: never = m;
 					return undefined;
+				}
 			}
 		})
 		.filter((m) => m !== undefined);

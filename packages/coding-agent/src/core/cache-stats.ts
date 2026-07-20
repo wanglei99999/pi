@@ -52,6 +52,7 @@ export interface CacheWasteTotals {
 }
 
 /** Minimal pricing lookup, satisfied by ModelRuntime. Cost is $/million tokens. */
+/** ModelRuntime 可满足的最小价格查询接口，价格单位为每百万令牌美元数。 */
 export interface ModelPriceSource {
 	getModel(provider: string, modelId: string): { cost: { cacheRead: number } } | undefined;
 }

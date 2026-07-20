@@ -42,6 +42,7 @@ export class CustomEditor extends Editor {
 		}
 
 		// Check for clipboard paste keybinding
+		// 图片粘贴是应用动作，由外层把剪贴板内容转换为编辑器插入标记。
 		if (this.keybindings.matches(data, "app.clipboard.pasteImage")) {
 			this.onPasteImage?.();
 			return;

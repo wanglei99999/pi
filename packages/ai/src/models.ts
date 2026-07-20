@@ -113,15 +113,21 @@ export interface Provider<TApi extends Api = Api> {
 
 	/**
 	 * Dynamic providers only: restore the provider-scoped stored catalog and optionally fetch
+	 * 仅用于动态提供商：恢复该提供商作用域的已存目录，并可选地
 	 * a newer list using the effective credential. Implementations must retain their previous
+	 * 用生效凭据获取更新的列表。实现必须在失败时保留之前的列表，
 	 * list on failure and honor the shared abort signal for network requests.
+	 * 并让网络请求遵守共享的中止信号。
 	 */
 	refreshModels?(context: RefreshModelsContext): Promise<void>;
 
 	/**
 	 * Optional provider policy for credential-specific model availability.
+	 * 可选的提供商策略，用于按凭证过滤模型可用性。
 	 * `getModels()` remains the complete synchronous catalog; `Models.getAvailable()`
+	 * `getModels()` 仍是完整的同步目录；`Models.getAvailable()`
 	 * applies this filter after confirming that provider auth is configured.
+	 * 在确认提供商认证已配置后才应用此过滤。
 	 */
 	filterModels?(models: readonly Model<TApi>[], credential: Credential | undefined): readonly Model<TApi>[];
 
@@ -138,9 +144,9 @@ export interface Provider<TApi extends Api = Api> {
  * Runtime collection of providers plus auth application and stream
  * 提供商的运行时集合，同时负责应用认证并提供流式调用便捷方法。
  * convenience. Providers own stream behavior; `Models` resolves auth and
-	 * 流式行为仍由各 Provider 实现；`Models` 解析认证，
+ * 流式行为仍由各 Provider 实现；`Models` 解析认证，
  * delegates each request to the provider that owns the model.
-	 * 再把请求委派给拥有该模型的提供商。
+ * 再把请求委派给拥有该模型的提供商。
  */
 export interface Models {
 	getProviders(): readonly Provider[];
@@ -164,19 +170,24 @@ export interface Models {
 
 	/**
 	 * Refresh every configured dynamic provider concurrently. Provider errors and cancellation
+	 * 并发刷新所有已配置的动态提供商。提供商错误与取消
 	 * are returned without rejecting; static and unconfigured providers are skipped.
+	 * 通过返回值报告而不 reject；静态和未配置的提供商会被跳过。
 	 */
 	refresh(options?: ModelsRefreshOptions): Promise<ModelsRefreshResult>;
 
 	/** Check whether a provider has complete auth configuration without refreshing OAuth. */
+	/** 检查提供商是否具备完整认证配置；不会触发 OAuth 刷新。 */
 	checkAuth(providerId: string): Promise<AuthCheck | undefined>;
 
 	/** Return models whose providers have complete auth configuration. */
+	/** 返回其提供商已具备完整认证配置的模型。 */
 	getAvailable(providerId?: string): Promise<readonly Model<Api>[]>;
 
 	/**
 	 * Resolve provider-scoped auth by provider id, or provider auth plus static
 	 * model headers when passed a model. Includes a source label for status UI.
+	 * 为模型解析请求认证，并携带供状态 UI 展示的来源标签。
 	 * Resolves `undefined` when the provider is unknown or unconfigured.
 	 * 提供商未知或未配置时解析为 undefined。
 	 * Rejects with `ModelsError`: code "oauth" when a token refresh fails (the
@@ -184,15 +195,19 @@ export interface Models {
 	 * stored credential is preserved for retry; re-login fixes it), code "auth"
 	 * 已存凭据会保留以便重试，重新登录可修复；api-key 解析或凭据存储失败时
 	 * when api-key resolution or the credential store fails. Request paths
+	 * 使用 code "auth"。请求路径
 	 * surface rejections as stream errors.
+	 * 会把 reject 转换为流错误。
 	 */
 	getAuth(providerId: string, overrides?: AuthResolutionOverrides): Promise<AuthResult | undefined>;
 	getAuth(model: Model<Api>, overrides?: AuthResolutionOverrides): Promise<AuthResult | undefined>;
 
 	/** Run a provider-owned login flow and persist its returned credential. */
+	/** 执行提供商自有的登录流程，并持久化其返回的凭证。 */
 	login(providerId: string, type: AuthType, interaction: AuthInteraction): Promise<Credential>;
 
 	/** Remove the stored credential for a provider. */
+	/** 删除该提供商已存储的凭证。 */
 	logout(providerId: string): Promise<void>;
 
 	stream<TApi extends Api>(
@@ -502,6 +517,7 @@ class ModelsImpl implements MutableModels {
 		const auth = resolution.auth;
 
 		// Explicit request options win per-field; the Models-only transform runs last.
+		// 显式请求选项按字段优先；headers 和 env 则按键合并，使调用方可局部覆盖认证结果。
 		const apiKey = options?.apiKey ?? auth.apiKey;
 		let headers = mergeHeaders(auth.headers, options?.headers);
 		if (options?.transformHeaders) headers = await options.transformHeaders(headers ?? {});
@@ -568,6 +584,7 @@ export interface CreateProviderOptions<TApi extends Api = Api> {
 	/** 必填；即使依赖环境凭据或无密钥的提供商也必须声明认证语义。 */
 	auth: ProviderAuth;
 	/** Static baseline model list (empty for purely dynamic providers). */
+	/** 初始模型列表；纯动态提供商可为空。 */
 	models: readonly Model<TApi>[];
 	/** Fetch a dynamic model overlay. createProvider restores/persists it through ModelsStore. */
 	fetchModels?: (context: RefreshModelsContext) => Promise<readonly Model<TApi>[]>;

@@ -160,6 +160,7 @@ export function getEnvApiKey(provider: string, env?: ProviderEnv): string | unde
 		const hasLocation = !!getProviderEnvValue("GOOGLE_CLOUD_LOCATION", env);
 
 		if (hasCredentials && hasProject && hasLocation) {
+			// 返回占位值表示认证已就绪但无需真实 apiKey，API 层将从环境解析 ADC 配置。
 			return "<authenticated>";
 		}
 	}

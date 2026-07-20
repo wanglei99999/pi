@@ -299,6 +299,7 @@ export function streamSimple<TApi extends Api>(
 ): AssistantMessageEventStream {
 	const builtinProvider = getBuiltinProviderForModel(model);
 	if (builtinProvider) {
+		// simple 变体沿用相同分发和环境密钥优先级，只收窄可传入的流选项。
 		if (model.provider.startsWith("cloudflare-") && !hasResolvedCloudflareAuth(options)) {
 			return compatModels.streamSimple(model, context, options);
 		}

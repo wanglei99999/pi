@@ -1106,6 +1106,7 @@ function buildAdditionalModelRequestFields(
 					};
 
 					// Custom budgets only cover token-based levels through high.
+					// 自定义预算覆盖默认值；ThinkingBudgets 不含 xhigh/max，因此映射到 high。
 					const level = options.reasoning === "xhigh" || options.reasoning === "max" ? "high" : options.reasoning;
 					const budget = options.thinkingBudgets?.[level] ?? defaultBudgets[options.reasoning];
 

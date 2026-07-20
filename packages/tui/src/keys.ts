@@ -1214,6 +1214,7 @@ export function matchesKey(data: string, keyId: KeyId): boolean {
 
 		if (modifier === MODIFIERS.alt && !_kittyProtocolActive && (isLetter || isDigit || SYMBOL_KEYS.has(key))) {
 			// Legacy: alt+printable key is ESC followed by the key
+			// 传统 Alt+字母或数字编码为 ESC 后跟原字符。
 			if (data === `\x1b${key}`) return true;
 		}
 

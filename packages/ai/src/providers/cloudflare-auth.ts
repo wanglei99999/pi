@@ -28,6 +28,7 @@ async function resolveCloudflareEnv(
 	ctx: AuthContext,
 	credential: ApiKeyCredential | undefined,
 ): Promise<{ apiKey: string; env: ProviderEnv; source: string } | undefined> {
+	// Workers AI 需要账户凭据，AI Gateway 还必须提供 gateway ID。
 	const apiKey = await resolveValue(CLOUDFLARE_API_KEY, ctx, credential);
 	const accountId = await resolveValue(CLOUDFLARE_ACCOUNT_ID, ctx, credential);
 	const gatewayId = kind === "ai-gateway" ? await resolveValue(CLOUDFLARE_GATEWAY_ID, ctx, credential) : undefined;

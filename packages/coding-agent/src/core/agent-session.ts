@@ -206,6 +206,7 @@ export interface AgentSessionConfig {
 	/** 在扩展之外注册的 SDK 自定义工具 */
 	customTools?: ToolDefinition[];
 	/** Canonical model/auth runtime used by coding-agent internals. */
+	/** coding-agent 内部使用的规范模型/认证运行时 */
 	modelRuntime: ModelRuntime;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
 	/** 初始启用的内置工具名称。默认值：[read, bash, edit, write] */
