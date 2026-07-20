@@ -4,6 +4,14 @@
 >
 > 所有 `文件:行号` 基于 commit `3f9aa5d1`。除特别注明外，路径相对 `packages/coding-agent/src/core/`。
 
+> **⚠️ v0.80.10 勘误（2026-07-20，fork 已并入上游 `3da591ab`）**：第 10 章描述的"旧世界原型"已被上游拆解——
+>
+> 1. **`ModelRegistry` 从 ~1000 行缩成 140 行**，只是面向扩展 API 的同步兼容外观。原职责拆进三个新文件：`model-config.ts`（models.json 不可变快照）、`provider-composer.ts`（内置/models.json/扩展三层组合成 Provider）、`model-runtime.ts`（新中枢 `ModelRuntime`，实现 pi-ai 的 `Models` 接口）。
+> 2. **`AuthStorage` 降级为 `CredentialStore` 实现**（auth.json + 文件锁仍在），OAuth 刷新编排上移至 pi-ai `auth/resolve.ts`——10.2 节预言的"原型 → 抽象"替换已完成。`--api-key` 改由 `RuntimeCredentials` 装饰器承载。
+> 3. **§2 的装配现场变了**：`createAgentSession` 现在装配 `await ModelRuntime.create(...)`（异步，含 15s 超时的首次目录刷新），streamFn 闭包调 `modelRuntime.streamSimple` 而非 compat 的全局函数；02 篇 §2.3 提到的"鉴权失败直接 throw"灰色地带随之消失。新增能力：pi.dev 远端模型目录（remote-catalog-provider.ts，4 小时节流 + 本地持久化）。
+>
+> 新文件均有中文注释可直接走读；本篇其余章节（会话树、压缩、重试、工具层、settings/trust）不受影响。
+
 ## 目录
 
 - 第 1 章 地形图：26,700 行的服务群

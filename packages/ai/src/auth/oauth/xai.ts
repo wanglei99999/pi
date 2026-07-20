@@ -1,5 +1,7 @@
 /**
  * xAI OAuth device-code flow.
+ * xAI 的 OAuth 设备码流程：只有 device-code 一条通道（无本地回调服务器），
+ * 因此不依赖 node:http，流程为 请求设备码 → 展示 userCode/URL → 轮询令牌端点。
  */
 
 import type { AuthInteraction, OAuthAuth, OAuthCredential } from "../types.ts";
@@ -10,6 +12,7 @@ const XAI_SCOPE = "openid profile email offline_access grok-cli:access api:acces
 const XAI_DEVICE_CODE_URL = "https://auth.x.ai/oauth2/device/code";
 const XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token";
 // Refresh slightly before the reported expiry to avoid using a token that dies mid-request.
+// 把过期时间提前 5 分钟记账，避免拿着"还差几秒过期"的令牌发请求、死在半路。
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 
@@ -48,6 +51,7 @@ function positiveNumber(body: JsonObject, field: string): number {
 
 // The verification URI is opened in the user's browser; force it to be an https URL
 // so a malicious response cannot make `open` launch something else.
+// 该 URI 会交给系统浏览器打开，强制 https 防止恶意响应借 `open` 执行其他协议（如 file:）。
 function validateVerificationUri(raw: string): string {
 	let url: URL;
 	try {
@@ -108,6 +112,7 @@ function requestFailure(action: string, response: OAuthHttpResponse): Error {
 function parseDeviceCode(body: JsonObject): XaiDeviceCode {
 	// RFC 8628 allows interval 0 (no minimum wait); fall back to the poller's
 	// default instead of failing on non-positive or malformed values.
+	// RFC 8628 允许 interval 为 0；非正数或畸形值不报错，交给轮询器用默认间隔。
 	const interval = body.interval;
 	const intervalSeconds =
 		typeof interval === "number" && Number.isFinite(interval) && interval > 0 ? interval : undefined;
@@ -128,6 +133,7 @@ function parseDeviceCode(body: JsonObject): XaiDeviceCode {
 function credentialsFromTokenResponse(body: JsonObject, previousRefreshToken?: string): OAuthCredential {
 	const access = requiredString(body, "access_token");
 	// xAI may omit refresh_token on refresh when the token is not rotated.
+	// 刷新时若令牌未轮换，响应可能不带 refresh_token，此时沿用旧的刷新令牌。
 	const refresh =
 		body.refresh_token === undefined && previousRefreshToken
 			? previousRefreshToken
@@ -226,6 +232,8 @@ async function refreshXaiToken(refreshToken: string, signal?: AbortSignal): Prom
 	return credentialsFromTokenResponse(response.body, refreshToken);
 }
 
+// OAuthAuth 三件套的最小实现：login 走设备码，refresh 换新令牌，
+// toAuth 直接把访问令牌当 API key 用（xAI 网关接受 Bearer access token）。
 export const xaiOAuth: OAuthAuth = {
 	name: "xAI (Grok/X subscription)",
 	loginLabel: "Sign in with SuperGrok or X Premium",

@@ -6,9 +6,15 @@
  *
  * NOTE: This module uses node:http for the OAuth callback server.
  * It is only intended for CLI use, not browser environments.
+ *
+ * Radius 是 pi-messages 网关。与其他 provider 不同，OAuth 端点不是硬编码的，
+ * 而是每次登录/刷新时从网关的 /v1/oauth 动态发现；登录支持浏览器回调和设备码两条通道。
+ * 本模块依赖 node:http 起本地回调服务器，仅供 CLI 使用。
  */
 
 // NEVER convert to top-level imports - breaks browser/Vite builds
+// 绝不能改成顶层 import——Vite 等浏览器打包器会静态解析 node:http 而构建失败；
+// 运行时探测到 Node/Bun 才动态加载（这是仓库"无内联 import"规则的少数豁免点）。
 let _http: typeof import("node:http") | null = null;
 if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
 	import("node:http").then((m) => {
@@ -144,6 +150,9 @@ type OAuthCallbackServer = {
 	close(): void;
 };
 
+// 本地回调服务器：校验 state（防 CSRF）后从回调 URL 提取授权码。
+// finish() 用 settled 标志保证只兑现一次；端口被占用等监听失败不抛错，
+// 而是降级为"永远等不到码"的空实现，由上层超时/取消收场。
 function startOAuthCallbackServer(
 	expectedState: string,
 	signal: AbortSignal | undefined,
@@ -220,6 +229,8 @@ function startOAuthCallbackServer(
 	});
 }
 
+// 浏览器通道：标准授权码 + PKCE。verifier 留在本地、challenge 进授权 URL，
+// 换令牌时凭 verifier 证明"发起授权的就是本进程"，即使授权码被截获也无法兑换。
 async function loginWithBrowser(oauth: RadiusOAuthConfig, interaction: AuthInteraction): Promise<OAuthCredential> {
 	const { verifier, challenge } = await generatePKCE();
 	const state = crypto.randomUUID();
@@ -305,6 +316,8 @@ async function requestDeviceAuthorization(
 	};
 }
 
+// 设备码通道：把令牌端点的 OAuth 错误码翻译成轮询器的四种状态
+//（pending 继续等 / slow_down 放慢 / expired、denied 终止），其他错误原样上抛。
 async function loginWithDeviceCode(oauth: RadiusOAuthConfig, interaction: AuthInteraction): Promise<OAuthCredential> {
 	const device = await requestDeviceAuthorization(oauth, interaction.signal);
 	interaction.notify({
@@ -357,6 +370,8 @@ export interface RadiusOAuthOptions {
 	gateway: string;
 }
 
+// 工厂而非单例：每个 Radius 网关（models.json 里 oauth: "radius" 的条目）各造一个 OAuthAuth。
+// login/refresh 都现场重新拉取 /v1/oauth 配置，网关轮换端点无需客户端更新。
 export function createRadiusOAuth(options: RadiusOAuthOptions): OAuthAuth {
 	const gateway = normalizeRadiusGatewayUrl(options.gateway);
 
