@@ -3170,6 +3170,7 @@ export class InteractiveMode {
 		this.footer.invalidate();
 
 		switch (event.type) {
+			//处理显示消息
 			case "agent_start":
 				this.pendingTools.clear();
 				// Restore main escape handler if retry handler is still active
@@ -3179,7 +3180,7 @@ export class InteractiveMode {
 					this.retryEscapeHandler = undefined;
 				}
 				break;
-
+			//显示工作状态
 			case "turn_start":
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
@@ -3193,12 +3194,12 @@ export class InteractiveMode {
 				}
 				this.ui.requestRender();
 				break;
-
+			//更新排队消息显示
 			case "queue_update":
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();
 				break;
-
+			//
 			case "entry_appended":
 				if (event.entry.type === "custom") {
 					this.addCustomEntryToChat(event.entry);

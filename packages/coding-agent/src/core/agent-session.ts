@@ -399,6 +399,8 @@ export class AgentSession {
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
+
+		//这里相当于传入自己的事件处理函数，内部通过this.listeners保存这些事件处理函数
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
 		this._installAgentNextTurnRefresh();
@@ -664,12 +666,15 @@ export class AgentSession {
 		}
 
 		// Emit to extensions first
+		//从agent事件转换到扩展事件
 		await this._emitExtensionEvent(event);
 
 		// Notify all listeners
+		//交给AgentSession自己的emit事件
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
 
 		// Handle session persistence
+		//message_end保存消息
 		if (event.type === "message_end") {
 			// Check if this is a custom message from extensions
 			if (event.message.role === "custom") {
@@ -757,7 +762,7 @@ export class AgentSession {
 		if (target === replacement) {
 			return;
 		}
-
+		//先删除地址引用位置的旧属性，然后复制，注意，agent.state.messages是保存了target的引用的
 		const targetRecord = target as unknown as Record<string, unknown>;
 		for (const key of Object.keys(targetRecord)) {
 			delete targetRecord[key];
@@ -801,6 +806,8 @@ export class AgentSession {
 				assistantMessageEvent: event.assistantMessageEvent,
 			};
 			await this._extensionRunner.emit(extensionEvent);
+
+		//message_end被特殊处理，因为它的返回值要进入Agent的核心数据流
 		} else if (event.type === "message_end") {
 			const extensionEvent: MessageEndEvent = {
 				type: "message_end",
@@ -1137,7 +1144,7 @@ export class AgentSession {
 			});
 			this._retryAttempt = 0;
 		}
-
+		//处理完一次消息后，检查上下文长度
 		if (await this._checkCompaction(msg)) {
 			return true;
 		}
@@ -1261,15 +1268,18 @@ export class AgentSession {
 
 			// Check if we need to compact before sending (catches aborted responses).
 			// The user's new prompt is sent below, so do not call agent.continue() here.
+			//发送前检查一下上下文长度
 			const lastAssistant = this._findLastAssistantMessage();
 			if (lastAssistant) {
 				await this._checkCompaction(lastAssistant, false);
 			}
 
 			// Build messages array (custom message if any, then user message)
+			//本次消息组装
 			messages = [];
 
 			// Add user message
+			//先加处理好的用户消息
 			const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
 			if (currentImages) {
 				userContent.push(...currentImages);
@@ -1281,12 +1291,14 @@ export class AgentSession {
 			});
 
 			// Inject any pending "nextTurn" messages as context alongside the user message
+			//添加扩展通过 sendCustomMessage放入的nexturn的消息
 			for (const msg of this._pendingNextTurnMessages) {
 				messages.push(msg);
 			}
 			this._pendingNextTurnMessages = [];
 
 			// Emit before_agent_start extension event
+			//允许 beforeagent修改prompt、messages
 			const result = await this._extensionRunner.emitBeforeAgentStart(
 				expandedText,
 				currentImages,
@@ -2270,6 +2282,9 @@ export class AgentSession {
 	 * @param willRetry Whether to continue the interrupted turn after overflow compaction
 	 * @returns Whether the post-run loop should call `agent.continue()`
 	 */
+	//pi的自动压缩机制
+	//这里，threshold是消息发送前压缩，在发送消息前发现了上下文问题
+	//overflow是溢出压缩，是实际溢出之后的压缩，
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
 		let started = false;
@@ -2283,7 +2298,8 @@ export class AgentSession {
 			const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(this.model);
 
 			const pathEntries = this.sessionManager.getBranch();
-
+			//prepareCompaction做的事情是准备压缩方案，包括：找出切点，确定哪些消息保留原文、哪些进入普通摘要、是否需要单独总结本轮前段；
+			//同时收集上次摘要、文件操作和压缩前的token估算
 			const preparation = prepareCompaction(pathEntries, settings);
 			if (!preparation) {
 				return false;
@@ -2380,7 +2396,9 @@ export class AgentSession {
 
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
 			const newEntries = this.sessionManager.getEntries();
+			// 重建“摘要 + 保留原文”
 			const sessionContext = this.sessionManager.buildSessionContext();
+			//重建后的消息
 			this.agent.state.messages = sessionContext.messages;
 			const estimatedTokensAfter = estimateMessagesTokens(sessionContext.messages);
 
@@ -2700,8 +2718,9 @@ export class AgentSession {
 		const excludedToolNames = this._excludedToolNames;
 		const isAllowedTool = (name: string): boolean =>
 			(!allowedToolNames || allowedToolNames.has(name)) && !excludedToolNames?.has(name);
-
+		//扩展工具
 		const registeredTools = this._extensionRunner.getAllRegisteredTools();
+		//扩展工具+sdk加入的工具
 		const allCustomTools = [
 			...registeredTools,
 			...this._customTools.map((definition) => ({
@@ -2709,6 +2728,7 @@ export class AgentSession {
 				sourceInfo: createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }),
 			})),
 		].filter((tool) => isAllowedTool(tool.definition.name));
+		//内置工具
 		const definitionRegistry = new Map<string, ToolDefinitionEntry>(
 			Array.from(this._baseToolDefinitions.entries())
 				.filter(([name]) => isAllowedTool(name))
@@ -2720,6 +2740,7 @@ export class AgentSession {
 					},
 				]),
 		);
+		//扩展+SDK工具加入工具定义注册表，注意set后覆盖前
 		for (const tool of allCustomTools) {
 			definitionRegistry.set(tool.definition.name, {
 				definition: tool.definition,
@@ -2744,7 +2765,9 @@ export class AgentSession {
 				.filter((entry): entry is readonly [string, string[]] => entry !== undefined),
 		);
 		const runner = this._extensionRunner;
+		//扩展+sdk工具
 		const wrappedExtensionTools = wrapRegisteredTools(allCustomTools, runner);
+		//内置
 		const wrappedBuiltInTools = wrapRegisteredTools(
 			Array.from(this._baseToolDefinitions.values())
 				.filter((definition) => isAllowedTool(definition.name))
@@ -2759,6 +2782,7 @@ export class AgentSession {
 		for (const tool of wrappedExtensionTools as AgentTool[]) {
 			toolRegistry.set(tool.name, tool);
 		}
+		//this._toolRegistry 本次工具
 		this._toolRegistry = toolRegistry;
 
 		const nextActiveToolNames = (
@@ -2775,6 +2799,7 @@ export class AgentSession {
 			for (const tool of wrappedExtensionTools) {
 				nextActiveToolNames.push(tool.name);
 			}
+			// 这个是激活新增工具
 		} else if (!options?.activeToolNames) {
 			for (const toolName of this._toolRegistry.keys()) {
 				if (!previousRegistryNames.has(toolName)) {

@@ -359,7 +359,7 @@ export async function createSessionManager(
 	if (parsed.noSession || parsed.help || parsed.listModels !== undefined) {
 		return SessionManager.inMemory(cwd, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
 	}
-
+	//这个是参数带fork的实现，新建一条sessionHeader，然后fork其它session条目过去，注意：返回的是SessionManager
 	if (parsed.fork) {
 		if (parsed.sessionId) {
 			const existingTarget = await findLocalSessionByExactId(parsed.sessionId, cwd, sessionDir);
@@ -398,6 +398,7 @@ export async function createSessionManager(
 					console.log(chalk.dim("Aborted."));
 					process.exit(0);
 				}
+				//注意global的实现，这里其实是将不属于本项目下的会话fork到本项目来
 				return forkSessionOrExit(resolved.path, cwd, sessionDir);
 			}
 
@@ -484,7 +485,7 @@ function buildSessionOptions(
 			}
 		}
 	}
-
+	//没有指定model且有可选模型且是新对话
 	if (!options.model && scopedModels.length > 0 && !hasExistingSession) {
 		// Check if saved default is in scoped models - use it if so, otherwise first scoped model
 		const savedProvider = settingsManager.getDefaultProvider();
@@ -673,7 +674,9 @@ export async function main(args: string[], options?: MainOptions) {
 		(parsed.sessionDir ? normalizePath(parsed.sessionDir) : undefined) ??
 		(envSessionDir ? expandTildePath(envSessionDir) : undefined) ??
 		startupSettingsManager.getSessionDir();
+	//这个位置处理了sessionMangaer的创建，包含了fork、continue、指定session和session以及新建的场景，然后有sessionManager构造函数完成初始化以及entry的加载。
 	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager);
+	//打开后cwd丢失。
 	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
 	if (missingSessionCwdIssue) {
 		if (appMode === "interactive") {
@@ -687,6 +690,7 @@ export async function main(args: string[], options?: MainOptions) {
 			process.exit(1);
 		}
 	}
+	//指定了name，要添加一个name消息
 	if (parsed.name !== undefined) {
 		const name = normalizeSessionName(parsed.name);
 		if (name === undefined) {
@@ -728,6 +732,7 @@ export async function main(args: string[], options?: MainOptions) {
 			: (cachedProjectTrust ??
 				parsed.projectTrustOverride ??
 				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
+		//这个是调用用户全局的setting.json和项目的setting.json，项目覆盖全局
 		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
 		const services = await createAgentSessionServices({
 			cwd,
@@ -784,7 +789,7 @@ export async function main(args: string[], options?: MainOptions) {
 				message: `Failed to load extension "${path}": ${error}`,
 			})),
 		];
-
+		//这里是规则匹配获得可用模型
 		const modelPatterns = parsed.models ?? settingsManager.getEnabledModels();
 		const scopedModels =
 			modelPatterns && modelPatterns.length > 0
@@ -797,12 +802,12 @@ export async function main(args: string[], options?: MainOptions) {
 		} = buildSessionOptions(
 			parsed,
 			scopedModels,
-			sessionManager.buildSessionContext().messages.length > 0,
+			sessionManager.buildSessionContext().messages.length > 0, //新会话和历史对话判断
 			modelRuntime,
 			settingsManager,
 		);
 		diagnostics.push(...sessionOptionDiagnostics);
-
+		//设置临时认证
 		if (parsed.apiKey) {
 			if (!sessionOptions.model) {
 				diagnostics.push({
@@ -875,7 +880,7 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 	}
 	time("readPipedStdin");
-
+	//这里准备初始消息，这个不是我们与harness正常交互的消息，案例：启动pi 【pi “xxx” “xxxx”】 这样在启动中带入参数的形式
 	const { initialMessage, initialImages } = await prepareInitialMessage(
 		parsed,
 		settingsManager.getImageAutoResize(),

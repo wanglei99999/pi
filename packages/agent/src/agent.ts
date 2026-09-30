@@ -358,6 +358,15 @@ export class Agent {
 	}
 
 	/** Continue from the current transcript. The last message must be a user or tool-result message. */
+	/*
+	助手已回答 + 用户排队说“再检查一下测试”
+		→ 最后是 assistant，但有 follow-up
+		→ 把“再检查一下测试”加为新消息，走 runPromptMessages()
+
+	上下文溢出 + 失败的 assistant 消息已移除
+		→ 最后一条是原用户消息或工具结果
+		→ 不添加新消息，走 runContinuation() 重试
+	 */
 	async continue(): Promise<void> {
 		if (this.activeRun) {
 			throw new Error("Agent is already processing. Wait for completion before continuing.");
@@ -367,14 +376,15 @@ export class Agent {
 		if (!lastMessage) {
 			throw new Error("No messages to continue from");
 		}
-
+		//消费steering消息
+		//模型已经给出回复，不能在没有新输入的情况下直接再要求它回复。
 		if (lastMessage.role === "assistant") {
 			const queuedSteering = this.steeringQueue.drain();
 			if (queuedSteering.length > 0) {
 				await this.runPromptMessages(queuedSteering, { skipInitialSteeringPoll: true });
 				return;
 			}
-
+			//消费followUp消息
 			const queuedFollowUps = this.followUpQueue.drain();
 			if (queuedFollowUps.length > 0) {
 				await this.runPromptMessages(queuedFollowUps);
@@ -383,7 +393,7 @@ export class Agent {
 
 			throw new Error("Cannot continue from message role: assistant");
 		}
-
+		//不是 assistant
 		await this.runContinuation();
 	}
 
@@ -550,7 +560,7 @@ export class Agent {
 			case "message_update":
 				this._state.streamingMessage = event.message;
 				break;
-
+			//messages_end 才把消息放到agent的messages中
 			case "message_end":
 				this._state.streamingMessage = undefined;
 				this._state.messages.push(event.message);

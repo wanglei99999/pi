@@ -132,8 +132,9 @@ export async function runAgentLoopContinue(
 	if (context.messages[context.messages.length - 1].role === "assistant") {
 		throw new Error("Cannot continue from message role: assistant");
 	}
-
+	//没有追加消息
 	const newMessages: AgentMessage[] = [];
+	// 有内容：当前完整上下文
 	const currentContext: AgentContext = { ...context };
 
 	await emit({ type: "agent_start" });
@@ -165,6 +166,7 @@ async function runLoop(
 	let config = initialConfig;
 	let lastCompletedTurn: PrepareNextTurnContext | undefined;
 	// Check for steering messages at start (user may have typed while waiting)
+	//拿到steering排队的消息
 	let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
 
 	// Outer loop: continues when queued follow-up messages arrive after agent would stop
@@ -172,6 +174,7 @@ async function runLoop(
 		let hasMoreToolCalls = true;
 
 		// Inner loop: process tool calls and steering messages
+		//有工具结果需要交回模型，或取到了 steering：进入下一个 turn
 		while (hasMoreToolCalls || pendingMessages.length > 0) {
 			if (lastCompletedTurn) {
 				const nextTurnSnapshot = await config.prepareNextTurn?.(lastCompletedTurn);
@@ -196,7 +199,7 @@ async function runLoop(
 				}
 				await emit({ type: "turn_start" });
 			}
-
+			//先检查是否有带处理消息
 			// Process pending messages (inject before next assistant response)
 			if (pendingMessages.length > 0) {
 				for (const message of pendingMessages) {
@@ -207,11 +210,11 @@ async function runLoop(
 				}
 				pendingMessages = [];
 			}
-
+			//模型交互
 			// Stream assistant response
 			const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFunction);
 			newMessages.push(message);
-
+			//错误处理
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
 				await emit({ type: "turn_end", message, toolResults: [] });
 				await emit({ type: "agent_end", messages: newMessages });
@@ -219,6 +222,7 @@ async function runLoop(
 			}
 
 			// Check for tool calls
+			//function calling步骤
 			const toolCalls = message.content.filter((c) => c.type === "toolCall");
 
 			const toolResults: ToolResultMessage[] = [];
@@ -233,7 +237,7 @@ async function runLoop(
 						: await executeToolCalls(currentContext, message, config, signal, emit);
 				toolResults.push(...executedToolBatch.messages);
 				hasMoreToolCalls = !executedToolBatch.terminate;
-
+				//工具调用结果重新加入消息中
 				for (const result of toolResults) {
 					currentContext.messages.push(result);
 					newMessages.push(result);
@@ -241,24 +245,26 @@ async function runLoop(
 			}
 
 			await emit({ type: "turn_end", message, toolResults });
-
+			//手机当前turn的结果
 			lastCompletedTurn = {
 				message,
 				toolResults,
 				context: currentContext,
 				newMessages,
 			};
-
+			//pi没有使用这个hook，这个是在一轮turn结束后可以判断是否继续进行的
+			//比如工具调用完就满了，需要压缩，这里可以加压缩逻辑，然后通过agent.continue可以继续调用
 			if (await config.shouldStopAfterTurn?.(lastCompletedTurn)) {
 				await emit({ type: "agent_end", messages: newMessages });
 				return;
 			}
-
+			//循环内再获取一次steering队列消息
 			pendingMessages = (await config.getSteeringMessages?.()) || [];
 		}
 
 		// Agent would stop here. Check for follow-up messages.
 		const followUpMessages = (await config.getFollowUpMessages?.()) || [];
+		//一次agent结束用followup队列再启动一次
 		if (followUpMessages.length > 0) {
 			// Set as pending so inner loop processes them
 			pendingMessages = followUpMessages;

@@ -463,8 +463,11 @@ export function buildSessionContext(
 	leafId?: string | null,
 	byId?: Map<string, SessionEntry>,
 ): SessionContext {
+	//找叶子到根的一条上下文
 	const path = buildSessionPath(entries, leafId, byId);
+	//找模型和思考等级
 	const { thinkingLevel, model } = getSessionContextSettings(path);
+	//找到压缩位置，然后从session条目到message
 	const messages = buildContextEntries(entries, leafId, byId).flatMap(sessionEntryToContextMessages);
 	return { messages, thinkingLevel, model };
 }
@@ -1025,18 +1028,20 @@ export class SessionManager {
 	getSessionFile(): string | undefined {
 		return this.sessionFile;
 	}
-
+	//新会话在第一条 assistant 回复出现之前暂不创建文件；第一条回复出现时一次性写入全部记录，之后只追加新记录。
 	_persist(entry: SessionEntry): void {
 		if (!this.persist || !this.sessionFile) return;
 
 		const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
 		if (!hasAssistant) {
+			//打开了一个会话文件已经存在的文件，直接落盘
 			if (this.flushed) {
 				appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
 			} else {
 				// Mark as not flushed so when assistant arrives, all entries get written
 				this.flushed = false;
 			}
+			//新会话且未写过文件，直接return
 			return;
 		}
 
@@ -1560,6 +1565,7 @@ export class SessionManager {
 	 * @param cwdOverride Optional cwd override instead of the session header cwd.
 	 */
 	static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
+		//open还是还是很有意思的，先用一个4B的扫描，头部过大就扫描全文，preloadedFileEntries可以放到构造函数中用于加载不用第二次扫描
 		const resolvedPath = resolvePath(path);
 		let header: SessionHeader | null = null;
 		let preloadedFileEntries: FileEntry[] | undefined;

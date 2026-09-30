@@ -69,10 +69,13 @@ export interface CreateAgentSessionOptions {
 	 * `noTools` changes that default. When provided, only the listed tool names are
 	 * enabled.
 	 */
+	//白名单
 	tools?: string[];
 	/** Optional denylist of tool names to disable. Applies after `tools` when both are provided. */
+	//黑名单
 	excludeTools?: string[];
 	/** Custom tools to register (in addition to built-in tools). */
+	//放SDK工具定义的
 	customTools?: ToolDefinition[];
 
 	/** Resource loader. When omitted, DefaultResourceLoader is used. */
@@ -245,14 +248,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	if (thinkingLevel === undefined) {
 		thinkingLevel = settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
 	}
-
+	//这个是根据模型能力修正到支持的最高级别
 	// Clamp to model capabilities
 	if (!model) {
 		thinkingLevel = "off";
 	} else {
 		thinkingLevel = clampThinkingLevel(model, thinkingLevel) as ThinkingLevel;
 	}
-
+	//工具处理
 	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
 	const configuredDefaultToolNames = settingsManager.getDefaultTools();
 	const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
@@ -263,7 +266,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	).filter((name) => !excludedToolNameSet?.has(name));
 
 	let agent: Agent;
-
+	//消息转换和禁止图像处理
 	// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
 	const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
 		const converted = convertToLlm(messages);
@@ -364,8 +367,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (!runner) return messages;
 			return runner.emitContext(messages);
 		},
+		//模型生成中收到新用户消息时如何处理
 		steeringMode: settingsManager.getSteeringMode(),
+		//followUpMode：当前轮结束后如何处理排队消息
 		followUpMode: settingsManager.getFollowUpMode(),
+		//Provider 使用的传输方式
 		transport: settingsManager.getTransport(),
 		thinkingBudgets: settingsManager.getThinkingBudgets(),
 		maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,

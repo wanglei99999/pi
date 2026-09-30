@@ -859,7 +859,7 @@ export class ExtensionRunner {
 			for (const handler of handlers) {
 				try {
 					const handlerResult = await handler(event, ctx);
-
+					//compact、fork、tree、switch四种操作提供cancel钩子
 					if (this.isSessionBeforeEvent(event) && handlerResult) {
 						result = handlerResult as SessionBeforeEventResult;
 						if (result.cancel) {
@@ -886,7 +886,7 @@ export class ExtensionRunner {
 		const ctx = this.createContext();
 		let currentMessage = event.message;
 		let modified = false;
-
+		//获取on注册的各个extension，找到message_end的执行
 		for (const ext of this.extensions) {
 			const handlers = ext.handlers.get("message_end");
 			if (!handlers || handlers.length === 0) continue;
@@ -1031,6 +1031,7 @@ export class ExtensionRunner {
 		return undefined;
 	}
 
+	//生命周期context，发送在将pi消息格式转换到llm消息格式的时候
 	async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
 		const ctx = this.createContext();
 		let currentMessages = structuredClone(messages);
@@ -1243,6 +1244,8 @@ export class ExtensionRunner {
 	}
 
 	/** Emit input event. Transforms chain, "handled" short-circuits. */
+	// handled：扩展处理，短路，后续不再发给模型
+	// transform：扩展处理，继续传递
 	async emitInput(
 		text: string,
 		images: ImageContent[] | undefined,

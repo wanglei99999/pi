@@ -675,7 +675,9 @@ export async function generateSummaryWithUsage(
 	);
 
 	// Use update prompt if we have a previous summary, otherwise initial prompt
+	//压缩prompt二选一
 	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
+	// 可以在末尾注入提示词
 	if (customInstructions) {
 		basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
 	}
@@ -683,9 +685,11 @@ export async function generateSummaryWithUsage(
 	// Serialize conversation to text so model doesn't try to continue it
 	// Convert to LLM messages first (handles custom types like bashExecution, custom, etc.)
 	const llmMessages = convertToLlm(currentMessages);
+	//注意：对话消息也是要结构化给llm的
 	const conversationText = serializeConversation(llmMessages);
 
 	// Build the prompt with conversation wrapped in tags
+	//context最后形态：格式化message+此前summary+压缩提示词
 	let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
 	if (previousSummary) {
 		promptText += `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n`;
@@ -754,7 +758,7 @@ export function prepareCompaction(
 	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
 		return undefined;
 	}
-
+	//找到此前压缩的位置
 	let prevCompactionIndex = -1;
 	for (let i = pathEntries.length - 1; i >= 0; i--) {
 		if (pathEntries[i].type === "compaction") {
@@ -783,10 +787,14 @@ export function prepareCompaction(
 		return undefined; // Session needs migration
 	}
 	const firstKeptEntryId = firstKeptEntry.id;
-
+	//历史消息是用的普通压缩的，这里有两种情况
+	//切点若在轮次起点：普通摘要覆盖切点之前的历史。
+	//切点若在轮次中间：普通摘要只覆盖本轮开始之前的历史；
+	//本轮开始到切点之前的消息，另做一份衔接摘要。
 	const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
 
 	// Messages to summarize (will be discarded after summary)
+	//更早的历史消息，进入普通摘要
 	const messagesToSummarize: AgentMessage[] = [];
 	for (let i = boundaryStart; i < historyEnd; i++) {
 		const msg = getMessageFromEntryForCompaction(pathEntries[i]);
@@ -794,6 +802,7 @@ export function prepareCompaction(
 	}
 
 	// Messages for turn prefix summary (if splitting a turn)
+	//同一轮中、切点之前的消息，进入单独的衔接摘要
 	const turnPrefixMessages: AgentMessage[] = [];
 	if (cutPoint.isSplitTurn) {
 		for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {

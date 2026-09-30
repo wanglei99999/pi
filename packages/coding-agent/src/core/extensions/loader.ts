@@ -484,7 +484,7 @@ function isCurrentCacheToken(cacheToken: ExtensionCacheToken | undefined): cache
 		extensionCacheGeneration === cacheToken.generation
 	);
 }
-
+//load主要函数，返回extAPIFactory，其实就是扩展初始化函数
 async function loadExtensionModule(extensionPath: string, cacheToken?: ExtensionCacheToken) {
 	if (isCurrentCacheToken(cacheToken)) {
 		const cachedFactory = extensionCache.get(extensionPath);
